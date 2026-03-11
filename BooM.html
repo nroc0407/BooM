@@ -47,9 +47,10 @@
   #upgrade-overlay h2 { color: #ff0; font-size: 32px; letter-spacing: 4px; text-shadow: 0 0 16px #ff0; margin-bottom: 4px; }
   #upgrade-overlay .up-sub { color: #666; font-size: 17px; letter-spacing: 2px; margin-top: -10px; }
   .upgrade-btn {
-    width: 280px; padding: 12px 16px; background: transparent; border: 1px solid #c00; color: #eee;
-    font-family: 'Share Tech Mono', monospace; font-size: 16px; letter-spacing: 1px;
-    cursor: pointer; text-align: center; transition: all 0.15s; line-height: 1.6; vertical-align: top;
+    width: 340px; padding: 18px 22px; background: transparent; border: 1px solid #c00; color: #eee;
+    font-family: 'Share Tech Mono', monospace; font-size: 18px; letter-spacing: 1px;
+    cursor: pointer; text-align: center; transition: all 0.15s; line-height: 1.7; vertical-align: top;
+    font-weight: 600;
   }
   .upgrade-btn:hover { background: rgba(180,0,0,0.25); border-color: #f00; box-shadow: 0 0 14px #c0000066; }
   .caliber-btn { border-color: #a06000; }
@@ -61,8 +62,15 @@
   .darkmagic-btn:hover { background: rgba(128,0,128,0.25); border-color: #d040d0; box-shadow: 0 0 14px #80008066; }
 
   #upgrade-choices { display: flex; flex-direction: row; align-items: flex-start; justify-content: center; gap: 16px; }
-  .upgrade-btn .up-name { color: #c00; font-size: 17px; display: block; margin-bottom: 2px; font-weight: bold; }
-  .upgrade-btn .up-desc { color: #777; font-size: 13px; display: block; margin-top: 5px; }
+  .upgrade-btn .up-name { color: #c00; font-size: 21px; display: block; margin-bottom: 4px; font-weight: 900; letter-spacing: 2px; }
+  .upgrade-btn .up-short { color: #999; font-size: 14px; display: block; margin-top: 6px; letter-spacing: 1px; font-weight: 600; }
+  #up-tooltip-global {
+    display: none; position: fixed; z-index: 9999;
+    background: rgba(10,10,10,0.97); border: 1px solid #555;
+    color: #bbb; font-size: 12px; font-family: 'Share Tech Mono', monospace;
+    padding: 10px 14px; max-width: 280px; line-height: 1.7;
+    pointer-events: none; letter-spacing: 0.5px;
+  }
 
   #score-overlay {
     position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.55);
@@ -72,23 +80,21 @@
   #score-overlay .s-value { font-size: 26px; color: #c00; text-shadow: 0 0 8px #f00; line-height: 1.1; }
 
   /* 상단 중앙 체력/아머/EXP 바 */
-  #compass-bars { width: 460px; display: flex; flex-direction: column; gap: 6px; margin-top: 5px; }
+  #compass-bars { width: 598px; display: flex; flex-direction: column; gap: 6px; margin-top: 5px; }
   .bar-row { display: flex; align-items: center; gap: 8px; }
   .bar-label { font-size: 14px; letter-spacing: 1px; width: 28px; text-align: right; flex-shrink: 0; font-weight: bold; }
-  .bar-track { flex: 1; height: 14px; background: rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.15); position: relative; overflow: hidden; }
+  .bar-track { flex: 1; height: 18px; background: rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.15); position: relative; overflow: hidden; }
   .bar-fill { height: 100%; transition: width 0.12s; position: absolute; left: 0; top: 0; }
   #bar-hp-fill   { background: linear-gradient(90deg, #1a7a1a, #2ecc2e); box-shadow: 0 0 6px #0f0; }
   #bar-arm-fill  { background: linear-gradient(90deg, #1a3a7a, #2e7acc); box-shadow: 0 0 6px #08f; }
   #bar-exp-fill  { background: linear-gradient(90deg, #a67c00, #ffbf00); box-shadow: 0 0 6px #da0; }
   .bar-val { font-size: 14px; width: 35px; text-align: left; flex-shrink: 0; opacity: 0.9; }
 
-  /* 상단 방위계 */
+  /* 상단 중앙 HUD 바 컨테이너 */
   #compass {
     position: absolute; top: 10px; left: 50%; transform: translateX(-50%); width: 460px;
     z-index: 4; pointer-events: none; display: flex; flex-direction: column; align-items: center; gap: 3px;
   }
-  #compass-bar-wrap { position: relative; width: 100%; height: 34px; background: rgba(0,0,0,0.55); border: 1px solid #400; overflow: hidden; }
-  #compass-center-mark { position: absolute; left: 50%; top: 0; transform: translateX(-50%); width: 2px; height: 100%; background: #f00; z-index: 2; }
 
   #overlay {
     position: absolute; inset: 0; background: rgba(0,0,0,0.88); display: flex; flex-direction: column;
@@ -128,10 +134,6 @@
   </div>
 
   <div id="compass">
-    <div id="compass-bar-wrap">
-      <div id="compass-center-mark"></div>
-      <canvas id="compass-canvas" width="460" height="34"></canvas>
-    </div>
     <div id="compass-bars">
       <div class="bar-row">
         <span class="bar-label" style="color:#2ecc2e">HP</span>
@@ -165,17 +167,10 @@
     <p class="up-sub">업그레이드를 선택하세요</p>
     <div id="upgrade-choices"></div>
   </div>
+  <div id="up-tooltip-global"></div>
 
   <div id="overlay">
     <h1>BooM</h1>
-    <p>W / A / S / D  -  이동<br>마우스  -  좌우회전<br>좌클릭  -  발사 | SPACE  -  대쉬<br>R  -  재장전  |  SHIFT  -  달리기</p>
-    <div class="sens-wrap">
-      <label>마우스 민감도</label>
-      <div style="display:flex;align-items:center;gap:10px;">
-        <input type="range" id="sens-slider-main" min="1" max="20" step="1" value="6">
-        <span class="sens-val" id="sens-val-main">6</span>
-      </div>
-    </div>
     <button class="start-btn" id="start-btn">[ START ]</button>
   </div>
 
@@ -351,6 +346,10 @@ const BGM = (() => {
     setStage() {
       //---/// 스테이지 전환마다 랜덤 키노트·패턴으로 전조 ///---
       pickRandom();
+    },
+    setVolume(v) {
+      //---/// BGM 볼륨 실시간 조절 (0~1) ///---
+      if (masterGain) { masterGain.gain.cancelScheduledValues(getAudioCtx().currentTime); masterGain.gain.setValueAtTime(v, getAudioCtx().currentTime); }
     }
   };
 })();
@@ -449,6 +448,15 @@ function sndDryFire() {
   applyEnv(g.gain, now, 0.001, 0.002, 0.022, 0.18); osc.connect(g); g.connect(getAudioCtx().destination); osc.start(now); osc.stop(now + 0.03);
 }
 
+function sndEnemyFootstep() {
+  //---/// 몬스터 발소리 — 플레이어 발소리와 유사, 낮고 둔탁한 톤 ///---
+  resumeAudio(); const now = getAudioCtx().currentTime; const out = getAudioCtx().destination;
+  const nSrc = getAudioCtx().createBufferSource(); const nG = getAudioCtx().createGain(); const nF = getAudioCtx().createBiquadFilter();
+  nSrc.buffer = makeNoise(0.07); nF.type = 'lowpass'; nF.frequency.value = 200;
+  applyEnv(nG.gain, now, 0.003, 0.015, 0.06, 0.45);
+  nSrc.connect(nF); nF.connect(nG); nG.connect(out); nSrc.start(now);
+}
+
 function sndFootstep(fast) {
   resumeAudio(); const now = getAudioCtx().currentTime; const out = getAudioCtx().destination;
   const nSrc = getAudioCtx().createBufferSource(); const nG = getAudioCtx().createGain(); const nF = getAudioCtx().createBiquadFilter();
@@ -464,6 +472,9 @@ const NUM_RAYS = 550; const MAX_DEPTH = 20; const WALL_SCALE = 1.0;
 let ENEMY_COUNT = 8; const ITEM_COUNT = 5;
 //---/// 마우스 감도 — 기존 0.0025 에서 하향 조정 ///---
 let MOUSE_SENSITIVITY = 0.0005 * 6; // 슬라이더 기본값 6
+//---/// BGM 볼륨 상태 전역 ///---
+let _bgmVol = 0.8;
+let _bgmMuted = false;
 
 const enemyScale = { hp: 30, dmgMin: 5, dmgRange: 8, atkCooldown: 1.2, speed: 1.8 };
 
@@ -710,6 +721,7 @@ class Enemy {
     this.patrolTarget = null; this.patrolTimer = 0; this.alertTimer = 0;
     this.stunTimer = 0;   // 기절 지속시간
     this.frozenTimer = 0; // 빙결 지속시간
+    this.stepTimer = 0.3 + Math.random() * 0.3; //---/// 발소리 타이머 ///---
   }
 }
 
@@ -726,6 +738,7 @@ class ShooterEnemy {
     this.isShooter = true;
     this.stunTimer = 0; this.frozenTimer = 0;
     this._firedOnSight = false;
+    this.stepTimer = 0.3 + Math.random() * 0.3; //---/// 발소리 타이머 ///---
   }
 }
 
@@ -734,7 +747,7 @@ class BossEnemy {
   constructor(x, y) {
     this.x = x; this.y = y;
     const g = Math.pow(1.12, state.stage - 1);
-    this.hp = Math.round(enemyScale.hp * 12 * g); this.maxHp = this.hp;
+    this.hp = Math.round(enemyScale.hp * 8 * g); this.maxHp = this.hp;
     this.active = true; this.state = 'chase'; this.alertTimer = 99;
     this.attackCooldown = 0; this.inContact = false;
     this.shootCooldown = 1.5; this.chargeTime = 0;
@@ -742,26 +755,26 @@ class BossEnemy {
     this.patrolTarget = null; this.patrolTimer = 0;
     this.isBoss = true; this.phase = 1;
     this.stunTimer = 0; this.frozenTimer = 0;
-    this.invulnTimer = 0; // 페이즈 전환 무적 시간
+    this.invulnTimer = 0;
   }
   getSpeed() {
     const base = enemyScale.speed * 0.75;
-    if (this.phase === 3) return base * 1.8;
-    if (this.phase === 2) return base * 1.3;
+    if (this.phase === 2) return base * 1.4;
     return base;
   }
   updatePhase() {
     const pct = this.hp / this.maxHp;
-    const newPhase = pct > 0.6 ? 1 : pct > 0.3 ? 2 : 3;
+    //---/// 2페이즈: HP 50% 이하 ///---
+    const newPhase = pct > 0.5 ? 1 : 2;
     if (newPhase > this.phase) {
       this.phase = newPhase;
       this.hitFlash = 1.0;
       this.invulnTimer = 5.0; //---/// 페이즈 전환 시 5초 무적 ///---
       //---/// 검붉은 파티클 분출 ///---
-      for (let i = 0; i < 30; i++) {
+      for (let i = 0; i < 12; i++) {
         const ang = Math.random() * Math.PI * 2;
         const spd = 1.5 + Math.random() * 2.5;
-        particles.push({ x: this.x, y: this.y, vx: Math.cos(ang)*spd, vy: Math.sin(ang)*spd, life: 0.6 + Math.random()*0.6, color: Math.random() < 0.5 ? '#600' : '#3a0000' });
+        particles.push({ x: this.x, y: this.y, vx: Math.cos(ang)*spd, vy: Math.sin(ang)*spd, life: 0.5 + Math.random()*0.4, color: Math.random() < 0.5 ? '#600' : '#3a0000' });
       }
       //---/// 페이즈 전환마다 랜덤 아이템 4개 소환 ///---
       const phaseItemTypes = ['health','armor','ammo','health'];
@@ -810,6 +823,45 @@ document.addEventListener('keydown', e => {
       state.fadeOut = 0.8;
     }
   }
+
+  //---/// Q키 디버그 — 모든 업그레이드 텍스트 오버레이 출력 ///---
+  if (e.code === 'KeyQ') {
+    const existing = document.getElementById('debug-upgrade-overlay');
+    if (existing) { existing.remove(); return; }
+    const overlay = document.createElement('div');
+    overlay.id = 'debug-upgrade-overlay';
+    overlay.style.cssText = `
+      position:fixed; top:0; left:0; width:100%; height:100%; overflow-y:auto;
+      background:rgba(0,0,0,0.92); color:#ccc; font-family:'Share Tech Mono',monospace;
+      font-size:13px; z-index:9999; padding:20px; box-sizing:border-box;
+    `;
+    const groups = { normal:'#88aaff', caliber:'#ffcc44', darkmagic:'#cc66ff' };
+    let html = `<div style="color:#fff;font-size:18px;margin-bottom:16px;letter-spacing:3px">
+      DEBUG — 업그레이드 목록 <span style="color:#666;font-size:13px">[Q] 닫기</span>
+    </div>`;
+    let lastGroup = null;
+    UPGRADES.forEach(u => {
+      if (u.group !== lastGroup) {
+        const gc = groups[u.group] || '#aaa';
+        const gLabel = u.group.toUpperCase();
+        html += `<div style="color:${gc};font-size:12px;letter-spacing:3px;margin:18px 0 8px;border-bottom:1px solid ${gc}44;padding-bottom:4px">${gLabel}</div>`;
+        lastGroup = u.group;
+      }
+      const cond = u.condition ? (u.condition() ? '<span style="color:#4f4">해금</span>' : '<span style="color:#f44">잠김</span>') : '<span style="color:#888">항상</span>';
+      const gunTag = u.gun ? '<span style="color:#88f">[총기]</span> ' : '';
+      html += `
+        <div style="margin-bottom:12px;padding:8px 10px;background:#111;border-left:3px solid ${groups[u.group]||'#555'}">
+          <div style="margin-bottom:2px">${gunTag}<b style="color:#fff">${u.name}</b> <span style="color:#555;font-size:11px">${u.id}</span> ${cond}</div>
+          <div style="color:#aaa;font-size:12px;margin-bottom:4px">${u.short || ''}</div>
+          <div style="color:#666;font-size:11px;line-height:1.6;border-top:1px solid #222;padding-top:4px">${u.desc()}</div>
+        </div>`;
+    });
+    html += `<div style="margin-top:20px;color:#555;font-size:11px">* desc()는 현재 gun 상태 기준 / condition()은 현재 조건 기준</div>`;
+    overlay.innerHTML = html;
+    overlay.addEventListener('click', () => overlay.remove());
+    document.body.appendChild(overlay);
+    if (document.pointerLockElement === canvas) document.exitPointerLock();
+  }
 });
 document.addEventListener('keyup', e => { keys[e.code] = false; });
 
@@ -855,6 +907,14 @@ document.addEventListener('pointerlockchange', () => {
           <div style="display:flex;align-items:center;gap:10px;">
             <input type="range" id="sens-slider-pause" min="1" max="20" step="1" value="${Math.round(MOUSE_SENSITIVITY / 0.0005)}">
             <span class="sens-val" id="sens-val-pause">${Math.round(MOUSE_SENSITIVITY / 0.0005)}</span>
+          </div>
+        </div>
+        <div class="sens-wrap" style="margin-top:14px;">
+          <label>BGM 볼륨</label>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <input type="range" id="bgm-vol-slider" min="0" max="100" step="1" value="${Math.round(_bgmVol * 100)}">
+            <span class="sens-val" id="bgm-vol-val">${Math.round(_bgmVol * 100)}</span>
+            <button id="bgm-mute-btn" style="font-family:'Share Tech Mono',monospace;font-size:13px;background:transparent;border:1px solid #555;color:#ccc;padding:2px 10px;cursor:pointer;">${_bgmMuted ? 'UNMUTE' : 'MUTE'}</button>
           </div>
         </div>
       `;
@@ -1047,8 +1107,8 @@ function spawnNeededItem(x, y) {
 }
 
 function triggerDarkExplosion(cx, cy) {
-  for (let i = 0; i < 12; i++) {
-    particles.push({ x: cx, y: cy, vx: (Math.random()-0.5)*3, vy: (Math.random()-0.5)*3, life: 0.6+Math.random()*0.4, color: '#a0f' });
+  for (let i = 0; i < 6; i++) {
+    particles.push({ x: cx, y: cy, vx: (Math.random()-0.5)*3, vy: (Math.random()-0.5)*3, life: 0.5+Math.random()*0.3, color: '#a0f' });
   }
   sndShoot(); 
   
@@ -1156,10 +1216,16 @@ function handleEnemyKill(en) {
     showUpgradeUI();
   }
 
-  //---/// 마지막 적 처치: 시체 위치에 포털 소환 ///---
+  //---/// 마지막 적 처치: 고정 포탈 위치에서 서서히 소환 ///---
   const remaining = enemies.filter(e => e.active && e.hp > 0);
   if (remaining.length === 0 && state.stage % 5 !== 0) {
-    portal = { x: en.x, y: en.y, time: 0, active: true };
+    if (portal) {
+      portal.spawning = true;
+      portal.spawnProgress = 0;
+      portal.beamTimer = 2.0; //---/// 빔 연출 지속 ///---
+      portal.beamX = en.x;
+      portal.beamY = en.y;
+    }
   }
 }
 
@@ -1191,13 +1257,13 @@ function applyLightningWithFX(sourceEn, dmg, chain, visited = new Set()) {
   if (!target) return;
 
   //---/// 번개 이펙트: source → target 사이에 지그재그 파티클 ///---
-  const steps = 8 + Math.floor(Math.random() * 5);
+  const steps = 5 + Math.floor(Math.random() * 3);
   for (let i = 0; i <= steps; i++) {
     const t = i / steps;
-    const bx = sourceEn.x + (target.x - sourceEn.x) * t + (Math.random() - 0.5) * 0.35;
-    const by = sourceEn.y + (target.y - sourceEn.y) * t + (Math.random() - 0.5) * 0.35;
+    const bx = sourceEn.x + (target.x - sourceEn.x) * t + (Math.random() - 0.5) * 0.3;
+    const by = sourceEn.y + (target.y - sourceEn.y) * t + (Math.random() - 0.5) * 0.3;
     const col = Math.random() < 0.5 ? '#ffffaa' : '#ffee66';
-    particles.push({ x: bx, y: by, vx: (Math.random()-0.5)*0.3, vy: (Math.random()-0.5)*0.3, life: 0.18 + Math.random()*0.12, color: col });
+    particles.push({ x: bx, y: by, vx: (Math.random()-0.5)*0.2, vy: (Math.random()-0.5)*0.2, life: 0.14 + Math.random()*0.08, color: col });
   }
 
   target.hitFlash = 1.0;
@@ -1290,9 +1356,14 @@ function tryShoot() {
     const dx = en.x - player.x, dy = en.y - player.y; const dist = Math.hypot(dx, dy); if (dist > MAX_DEPTH) return;
     let diff = Math.atan2(dy, dx) - player.angle;
     while (diff >  Math.PI) diff -= Math.PI * 2; while (diff < -Math.PI) diff += Math.PI * 2;
-    if (Math.abs(diff) > 0.08) return;
+    //---/// 근거리일수록 각도 허용치 확장 (0.5u 이내는 반구 전체 허용) ///---
+    const hitAngle = dist < 0.8 ? Math.PI : Math.max(0.08, 0.22 / Math.max(dist, 0.1));
+    if (Math.abs(diff) > hitAngle) return;
+    //---/// 벽 체크: 너무 가까우면 스킵 ///---
     const steps = Math.ceil(dist * 8);
-    for (let s = 1; s < steps - 1; s++) if (isWall(player.x + (en.x-player.x)/steps*s, player.y + (en.y-player.y)/steps*s)) return;
+    if (steps >= 2) {
+      for (let s = 1; s < steps - 1; s++) if (isWall(player.x + (en.x-player.x)/steps*s, player.y + (en.y-player.y)/steps*s)) return;
+    }
     candidates.push({ en, dist });
   });
   candidates.sort((a, b) => a.dist - b.dist);
@@ -1368,7 +1439,10 @@ function tryMelee() {
 }
 
 function spawnBlood(x, y, count) {
-  for (let i = 0; i < count; i++) particles.push({ x, y, vx: (Math.random()-0.5)*2, vy: (Math.random()-0.5)*2, life: 0.4+Math.random()*0.4, color: '#a00' });
+  //---/// 파티클 최대 개수 캡 — 초과 시 생성 억제 ///---
+  if (particles.length > 120) return;
+  const cap = Math.min(count, 3);
+  for (let i = 0; i < cap; i++) particles.push({ x, y, vx: (Math.random()-0.5)*2, vy: (Math.random()-0.5)*2, life: 0.35+Math.random()*0.25, color: '#a00' });
 }
 
 function tryDash() {
@@ -1612,9 +1686,9 @@ function updateEnemies(dt) {
         if (!en.inContact) { en.attackCooldown = 0; en.inContact = true; }
         en.attackCooldown -= dt;
         if (en.attackCooldown <= 0) {
-          const cdMult = en.phase === 3 ? 0.5 : en.phase === 2 ? 0.7 : 1.0;
+          const cdMult = en.phase === 2 ? 0.6 : 1.0;
           en.attackCooldown = enemyScale.atkCooldown * cdMult * (0.7 + Math.random() * 0.3);
-          const dmgMult = en.phase === 3 ? 2.2 : en.phase === 2 ? 1.6 : 1.2;
+          const dmgMult = en.phase === 2 ? 1.8 : 1.2;
           const dmg = Math.round((enemyScale.dmgMin + Math.random() * enemyScale.dmgRange) * dmgMult);
           const absorbed = Math.min(state.armor, Math.floor(dmg / 2));
           state.armor -= absorbed; state.health -= (dmg - absorbed);
@@ -1624,16 +1698,16 @@ function updateEnemies(dt) {
           if (state.health <= 0) { state.health = 0; state.dead = true; } updateHUD();
         }
       } else { en.inContact = false; }
-      //---/// 보스 원거리 산탄 — 페이즈별 발사 수 증가, 무적 중 불가 ///---
+      //---/// 보스 원거리 산탄 — 2페이즈, 무적 중 불가 ///---
       if (en.invulnTimer <= 0) en.shootCooldown -= dt;
-      const shootCount = en.phase === 3 ? 8 : en.phase === 2 ? 5 : 3;
-      const shootInterval = en.phase === 3 ? 1.2 : en.phase === 2 ? 1.8 : 2.5;
+      const shootCount    = en.phase === 2 ? 4 : 2;
+      const shootInterval = en.phase === 2 ? 1.5 : 2.5;
       if (canSeePlayer && en.invulnTimer <= 0 && en.shootCooldown <= 0) {
         en.shootCooldown = shootInterval;
-        const spread = Math.PI / (en.phase === 3 ? 2.5 : en.phase === 2 ? 3.5 : 5);
+        const spread = Math.PI / (en.phase === 2 ? 3.0 : 5.0);
         for (let s = 0; s < shootCount; s++) {
-          const shootAng = Math.atan2(dy, dx) - spread / 2 + (s / (shootCount - 1)) * spread;
-          enemyBullets.push({ x: en.x, y: en.y, vx: Math.cos(shootAng) * 4.0, vy: Math.sin(shootAng) * 4.0, life: 3.5, shooter: en });
+          const a = Math.atan2(dy, dx) - spread / 2 + (s / Math.max(1, shootCount - 1)) * spread;
+          enemyBullets.push({ x: en.x, y: en.y, vx: Math.cos(a) * 4.0, vy: Math.sin(a) * 4.0, life: 3.5, shooter: en });
         }
       }
       return;
@@ -1661,6 +1735,14 @@ function updateEnemies(dt) {
       const ny = en.y + moveY;
       if (!isWall(en.x + ENEMY_RADIUS, ny + Math.sign(moveY) * ENEMY_RADIUS) && !isWall(en.x - ENEMY_RADIUS, ny + Math.sign(moveY) * ENEMY_RADIUS)) en.y = ny;
       else if (en.state === 'patrol') en.patrolTarget = null;
+    }
+    //---/// 몬스터 발소리 — 이동 중이고 플레이어와 가까울 때만 재생 ///---
+    if ((moveX !== 0 || moveY !== 0) && dist < 14) {
+      en.stepTimer = (en.stepTimer || 0) - dt;
+      if (en.stepTimer <= 0) {
+        sndEnemyFootstep();
+        en.stepTimer = en.state === 'chase' ? 0.36 : 0.55;
+      }
     }
     const enTileX = Math.floor(en.x), enTileY = Math.floor(en.y);
     for (let ty = enTileY - 1; ty <= enTileY + 1; ty++) {
@@ -1797,10 +1879,19 @@ function updateItems() {
 function updateParticles(dt) {
   particles = particles.filter(p => p.life > 0);
   particles.forEach(p => { p.x += p.vx*dt; p.y += p.vy*dt; p.life -= dt; });
+  //---/// 120개 초과 시 수명 짧은 것부터 제거 ///---
+  if (particles.length > 120) {
+    particles.sort((a,b) => b.life - a.life);
+    particles.length = 120;
+  }
 }
 
 function castRays(bobY) {
   const imgData = ctx.createImageData(SCREEN_W, SCREEN_H); const data = imgData.data; const zBuffer = new Float32Array(NUM_RAYS);
+  //---/// 잔여 적 수 (매 레이마다 계산 방지) ///---
+  const _aliveCount = enemies.filter(e => e.active && e.hp > 0).length;
+  //---/// 잔여 3마리 이하: 벽 투명도 비율 (1=불투명, 0.22=최소) ///---
+  const _wallOpacity = _aliveCount <= 3 ? Math.max(0.22, (_aliveCount / 3) * 0.6 + 0.22) : 1.0;
   for (let y = 0; y < SCREEN_H; y++) {
     let r, g, b;
     if (y < SCREEN_H/2) {
@@ -1834,27 +1925,31 @@ function castRays(bobY) {
     const colors = WALL_COLORS[wallType]||WALL_COLORS[1]; const hex = colors[side===1?0:1];
     const wr=parseInt(hex.slice(1,3),16), wg=parseInt(hex.slice(3,5),16), wb=parseInt(hex.slice(5,7),16);
     const fog = Math.max(0, 1-dist/MAX_DEPTH);
+    //---/// 잔여 3마리 이하: RGB를 배경색(10,10,10)과 lerp — putImageData는 알파 블렌딩 없음 ///---
+    const op = _wallOpacity;
+    const fr = Math.floor(wr * fog * op + 10 * (1 - op));
+    const fg2 = Math.floor(wg * fog * op + 10 * (1 - op));
+    const fb = Math.floor(wb * fog * op + 10 * (1 - op));
     const screenX0 = Math.round(ray * SCREEN_W / NUM_RAYS); const screenX1 = Math.round((ray + 1) * SCREEN_W / NUM_RAYS);
     for (let y=wallTop; y<wallBottom; y++) {
       for (let px=screenX0; px<screenX1; px++) {
-        const i=(y*SCREEN_W+px)*4; data[i]=Math.floor(wr*fog); data[i+1]=Math.floor(wg*fog); data[i+2]=Math.floor(wb*fog); data[i+3]=255;
+        const i=(y*SCREEN_W+px)*4; data[i]=fr; data[i+1]=fg2; data[i+2]=fb; data[i+3]=255;
       }
     }
   }
   ctx.putImageData(imgData, 0, 0); return zBuffer;
 }
 
+const _sprites = []; //---/// 매 프레임 재할당 방지 — 배열 재사용 ///---
 function renderSprites(zBuffer, bobY) {
-  const sprites = [];
-  enemies.forEach(en => sprites.push({ type:'enemy', obj:en, dist:Math.hypot(en.x-player.x, en.y-player.y) }));
-  //---/// 적 총알을 스프라이트 목록에 추가 ///---
-  enemyBullets.forEach(b => sprites.push({ type:'ebullet', obj:b, dist:Math.hypot(b.x-player.x, b.y-player.y) }));
-  items.forEach(it => { if (!it.active) return; sprites.push({ type:'item', obj:it, dist:Math.hypot(it.x-player.x, it.y-player.y) }); });
-  particles.forEach(p => sprites.push({ type:'particle', obj:p, dist:Math.hypot(p.x-player.x, p.y-player.y) }));
-  
-  if (portal && portal.active) sprites.push({ type: 'portal', obj: portal, dist: Math.hypot(portal.x - player.x, portal.y - player.y) });
-
-  sprites.sort((a,b) => b.dist-a.dist);
+  _sprites.length = 0;
+  enemies.forEach(en => _sprites.push({ type:'enemy', obj:en, dist:Math.hypot(en.x-player.x, en.y-player.y) }));
+  enemyBullets.forEach(b => _sprites.push({ type:'ebullet', obj:b, dist:Math.hypot(b.x-player.x, b.y-player.y) }));
+  items.forEach(it => { if (!it.active) return; _sprites.push({ type:'item', obj:it, dist:Math.hypot(it.x-player.x, it.y-player.y) }); });
+  particles.forEach(p => _sprites.push({ type:'particle', obj:p, dist:Math.hypot(p.x-player.x, p.y-player.y) }));
+  if (portal && portal.active) _sprites.push({ type: 'portal', obj: portal, dist: Math.hypot(portal.x - player.x, portal.y - player.y) });
+  _sprites.sort((a,b) => b.dist-a.dist);
+  const sprites = _sprites;
   sprites.forEach(({ type, obj, dist }) => {
     const dx=obj.x-player.x, dy=obj.y-player.y;
     let sa = Math.atan2(dy,dx) - player.angle;
@@ -1884,7 +1979,6 @@ function renderSprites(zBuffer, bobY) {
         const by2 = spriteTop + spriteH * 0.5;
         const isRef = obj.reflected;
         ctx.save();
-        //---/// 외곽 글로우 ///---
         const grd = ctx.createRadialGradient(screenX, by2, 0, screenX, by2, sz * 2.2);
         if (isRef) {
           grd.addColorStop(0,   'rgba(180,220,255,0.95)');
@@ -1897,7 +1991,6 @@ function renderSprites(zBuffer, bobY) {
         }
         ctx.beginPath(); ctx.arc(screenX, by2, sz * 2.2, 0, Math.PI * 2);
         ctx.fillStyle = grd; ctx.fill();
-        //---/// 코어 ///---
         ctx.beginPath(); ctx.arc(screenX, by2, sz * 0.55, 0, Math.PI * 2);
         ctx.fillStyle = isRef ? '#e0f4ff' : '#fff8c0'; ctx.fill();
         ctx.restore();
@@ -1920,8 +2013,11 @@ function renderSprites(zBuffer, bobY) {
     if (type === 'portal') {
       const sz = spriteH * 0.6;
       const px = screenX, py = spriteTop + spriteH * 0.5;
+      const spawnP = (obj.spawnProgress !== undefined && !obj.active && obj.spawning) ? obj.spawnProgress : 1.0;
       ctx.save();
+      ctx.globalAlpha = spawnP;
       ctx.translate(px, py);
+      ctx.scale(0.4 + spawnP * 0.6, 0.4 + spawnP * 0.6);
       //---/// 각 원마다 개별 회전: 홀수=정방향 짝수=역방향, 속도 차이 ///---
       const rotSpeeds = [1.7, -1.1, 2.3, -0.8];
       const rotOffsets = [0, Math.PI * 0.25, Math.PI * 0.5, Math.PI * 0.75];
@@ -1944,8 +2040,8 @@ function renderSprites(zBuffer, bobY) {
         const hitAlpha = en.hitFlash || 0;
         const invuln = en.invulnTimer > 0;
         const bodyC = hitAlpha > 0 ? `rgba(255,${Math.floor(60*(1-hitAlpha))},${Math.floor(60*(1-hitAlpha))},1)` : '#111';
-        //---/// 3페이즈: 빨간 얼굴 / 1~2페이즈: 갈색 ///---
-        const headC = hitAlpha > 0 ? `rgba(220,${Math.floor(100*(1-hitAlpha))},0,1)` : (en.phase === 3 ? '#cc2200' : '#7a4420');
+        //---/// 2페이즈: 빨간 얼굴 / 1페이즈: 갈색 ///---
+        const headC = hitAlpha > 0 ? `rgba(220,${Math.floor(100*(1-hitAlpha))},0,1)` : (en.phase === 2 ? '#cc2200' : '#7a4420');
         const hornC = hitAlpha > 0 ? '#ff6633' : '#cc1100';
         const sc = 1.4;
 
@@ -1958,7 +2054,7 @@ function renderSprites(zBuffer, bobY) {
           ctx.beginPath();
           ctx.arc(screenX, haloY, haloR, 0, Math.PI * 2);
           const haloGrad = ctx.createRadialGradient(screenX, haloY, haloR*0.6, screenX, haloY, haloR);
-          const haloColor = en.phase === 3 ? '255,60,0' : '255,200,80';
+          const haloColor = '255,60,0';
           haloGrad.addColorStop(0, `rgba(${haloColor},${haloAlpha})`);
           haloGrad.addColorStop(1, `rgba(${haloColor},0)`);
           ctx.fillStyle = haloGrad;
@@ -1982,7 +2078,7 @@ function renderSprites(zBuffer, bobY) {
         ctx.fillRect(screenX - halfW*0.3*sc, spriteTop+spriteH*(1-1.08*sc), halfW*0.12*sc, spriteH*0.15*sc);
         ctx.fillRect(screenX + halfW*0.18*sc, spriteTop+spriteH*(1-1.08*sc), halfW*0.12*sc, spriteH*0.15*sc);
         //---/// 눈 ///---
-        ctx.fillStyle = hitAlpha > 0.5 ? '#f00' : (en.phase === 3 ? '#ff4400' : '#fff');
+        ctx.fillStyle = hitAlpha > 0.5 ? '#f00' : (en.phase === 2 ? '#ff4400' : '#fff');
         const eyeOff = en.frame===0?-halfW*0.06:halfW*0.06;
         ctx.fillRect(screenX-halfW*0.18*sc+eyeOff, spriteTop+spriteH*(1-0.86*sc), halfW*0.12*sc, spriteH*0.1*sc);
         ctx.fillRect(screenX+halfW*0.06*sc+eyeOff, spriteTop+spriteH*(1-0.86*sc), halfW*0.12*sc, spriteH*0.1*sc);
@@ -2113,55 +2209,56 @@ function renderCrosshair() {
   ctx.stroke(); ctx.restore();
 }
 
-function renderCompass() {
-  const cCanvas = document.getElementById('compass-canvas'); if (!cCanvas) return;
-  const cCtx = cCanvas.getContext('2d'); const W = cCanvas.width, H = cCanvas.height;
-  cCtx.clearRect(0, 0, W, H); cCtx.fillStyle = 'rgba(0,0,0,0)'; cCtx.fillRect(0, 0, W, H);
-  const degPerPx = 0.5; const centerDeg = player.angle * 180 / Math.PI; const totalDeg = W * degPerPx;
-  const cardinals = { 0: 'E', 90: 'S', 180: 'W', 270: 'N', 360: 'E' }; const startDeg = centerDeg - totalDeg / 2;
-  for (let d = Math.floor(startDeg / 10) * 10; d <= startDeg + totalDeg; d += 10) {
-    const px = W / 2 + (d - centerDeg) / degPerPx; if (px < 0 || px > W) continue;
-    const isMajor = d % 90 === 0; const isMid = d % 45 === 0;
-    cCtx.strokeStyle = isMajor ? '#c00' : isMid ? '#844' : '#422'; cCtx.lineWidth = isMajor ? 2 : 1;
-    cCtx.beginPath(); cCtx.moveTo(px, isMajor ? 2 : isMid ? 6 : 10); cCtx.lineTo(px, H); cCtx.stroke();
-    const norm = ((d % 360) + 360) % 360;
-    if (cardinals[norm]) { cCtx.fillStyle = '#f00'; cCtx.font = 'bold 11px monospace'; cCtx.textAlign = 'center'; cCtx.fillText(cardinals[norm], px, 11); }
-  }
 
-  const aliveEnemies = enemies.filter(en => en.hp > 0);
-  if (aliveEnemies.length <= 2 && aliveEnemies.length > 0) {
-    aliveEnemies.forEach(en => {
-      const dx = en.x - player.x, dy = en.y - player.y; const enAngleDeg = Math.atan2(dy, dx) * 180 / Math.PI;
-      const px = W / 2 + (enAngleDeg - centerDeg) / degPerPx;
-      if (px >= 4 && px <= W - 4) {
-        const dist = Math.hypot(dx, dy);
-        cCtx.fillStyle = '#ff0'; cCtx.shadowColor = '#ff0'; cCtx.shadowBlur = 6;
-        cCtx.beginPath(); cCtx.moveTo(px, H - 2); cCtx.lineTo(px - 5, H - 12); cCtx.lineTo(px + 5, H - 12); cCtx.closePath(); cCtx.fill();
-        cCtx.shadowBlur = 0; cCtx.fillStyle = '#ff0'; cCtx.font = '9px monospace'; cCtx.textAlign = 'center'; cCtx.fillText(dist.toFixed(0) + 'm', px, H - 14);
-      } else {
-        const edgeX = px < 4 ? 8 : W - 8; const dir = px < 4 ? -1 : 1;
-        cCtx.fillStyle = '#ff0'; cCtx.beginPath(); cCtx.moveTo(edgeX + dir * 6, H / 2);
-        cCtx.lineTo(edgeX - dir * 2, H / 2 - 5); cCtx.lineTo(edgeX - dir * 2, H / 2 + 5); cCtx.closePath(); cCtx.fill();
-      }
-    });
+function renderPortalBeam() {
+  //---/// 마지막 적 사망 위치에서 하늘로 솟는 푸른 빔 ///---
+  if (!portal || !portal.beamTimer || portal.beamTimer <= 0) return;
+  const beamAlpha = Math.min(1, portal.beamTimer) * 0.85;
+  const dx = portal.beamX - player.x, dy = portal.beamY - player.y;
+  let sa = Math.atan2(dy, dx) - player.angle;
+  while (sa >  Math.PI) sa -= Math.PI * 2;
+  while (sa < -Math.PI) sa += Math.PI * 2;
+  if (Math.abs(sa) > HALF_FOV + 0.2) return;
+  const dist = Math.hypot(dx, dy);
+  if (dist < 0.4) return;
+  const corrected = dist * Math.cos(sa);
+  const screenX = Math.floor(((sa / FOV) + 0.5) * SCREEN_W);
+  //---/// 빔 하단: 지면 기준 스프라이트 발 위치 ///---
+  const spriteH = Math.floor((SCREEN_H / corrected) * 0.85);
+  const spriteBottom = Math.floor((SCREEN_H + spriteH) / 2);
+  const beamBottom = Math.min(SCREEN_H, spriteBottom);
+  //---/// 빔은 화면 최상단(y=0)에서 하단까지 — 천장 없음 연출 ///---
+  const beamTop = 0;
+  const beamW = Math.max(6, Math.floor(SCREEN_H / Math.max(corrected, 0.5) * 0.06));
+  const t = Date.now() / 300;
+  //---/// 글로우 레이어 → 코어 순으로 렌더 ///---
+  for (let layer = 3; layer >= 0; layer--) {
+    const w = beamW * (1 + layer * 1.5);
+    const a = beamAlpha * (0.08 + (3 - layer) * 0.20) * (0.80 + Math.sin(t * 1.3 + layer) * 0.20);
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, a);
+    const grad = ctx.createLinearGradient(0, beamTop, 0, beamBottom);
+    grad.addColorStop(0,   `rgba(200,235,255,${layer === 0 ? 1.0 : 0.7})`);
+    grad.addColorStop(0.3, `rgba(100,180,255,0.9)`);
+    grad.addColorStop(0.7, `rgba(40,120,255,0.6)`);
+    grad.addColorStop(1,   `rgba(20,60,255,0)`);
+    ctx.fillStyle = grad;
+    ctx.fillRect(screenX - w / 2, beamTop, w, beamBottom - beamTop);
+    ctx.restore();
   }
-
-  if (portal && portal.active) {
-    const dx = portal.x - player.x, dy = portal.y - player.y;
-    const portalAngleDeg = Math.atan2(dy, dx) * 180 / Math.PI;
-    const px = W / 2 + (portalAngleDeg - centerDeg) / degPerPx;
-    if (px >= 4 && px <= W - 4) {
-      cCtx.fillStyle = '#fff'; cCtx.shadowColor = '#fff'; cCtx.shadowBlur = 6;
-      cCtx.beginPath(); cCtx.arc(px, H - 8, 3, 0, Math.PI * 2); cCtx.fill();
-      cCtx.shadowBlur = 0;
-    } else {
-      const edgeX = px < 4 ? 8 : W - 8;
-      cCtx.fillStyle = '#fff'; cCtx.shadowColor = '#fff'; cCtx.shadowBlur = 6;
-      cCtx.beginPath(); cCtx.arc(edgeX, H / 2, 3, 0, Math.PI * 2); cCtx.fill();
-      cCtx.shadowBlur = 0;
-    }
-  }
+  //---/// 빔 발원점 링 이펙트 ///---
+  const ringY = Math.floor((SCREEN_H - spriteH) / 2) + spriteH * 0.5;
+  const ringR = beamW * (1.5 + Math.sin(t * 4) * 0.4);
+  ctx.save();
+  ctx.globalAlpha = beamAlpha * 0.6;
+  ctx.beginPath();
+  ctx.arc(screenX, ringY, ringR, 0, Math.PI * 2);
+  ctx.strokeStyle = 'rgba(150,220,255,1)';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.restore();
 }
+
 
 function renderDamageFlash(dt) {
   const el = document.getElementById('damage-flash');
@@ -2205,123 +2302,166 @@ function renderDamageFlash(dt) {
 }
 
 const UPGRADES = [
-  { id: 'mag_cap', group: 'normal', gun: true, name: '대용량 탄창', desc: () => `탄창 기본 용량 +2<br><span style="color:#aaa">${gun.BASE_MAG_SIZE}발 → ${gun.BASE_MAG_SIZE + 2}발</span>`, apply: () => { gun.BASE_MAG_SIZE += 2; applyCaliberStats(); } },
-  { id: 'charge', group: 'normal', gun: true, name: '강화장약', desc: () => `기준 데미지 +6<br><span style="color:#aaa">기준 ${gun.DMG_BASE} → ${gun.DMG_BASE + 6}</span>`, apply: () => { gun.DMG_BASE += 6; } },
+  { id: 'mag_cap', group: 'normal', gun: true, name: '대용량 탄창',
+    short: '탄창 용량 +',
+    desc: () => `* 탄창 기본 용량 +2<br><span style="color:#aaa">* ${gun.BASE_MAG_SIZE}발 → ${gun.BASE_MAG_SIZE + 2}발</span>`,
+    apply: () => { gun.BASE_MAG_SIZE += 2; applyCaliberStats(); } },
+
+  { id: 'charge', group: 'normal', gun: true, name: '강화장약',
+    short: '기본 데미지 +',
+    desc: () => `* 기준 데미지 +6<br><span style="color:#aaa">* ${gun.DMG_BASE} → ${gun.DMG_BASE + 6}</span>`,
+    apply: () => { gun.DMG_BASE += 6; } },
+
   { id: 'pierce', group: 'normal', gun: true, name: '철갑피모',
-    desc: () => { const next = gun.BASE_PIERCE + 1; const note = gun.EXCLUSIVE_MODE === 'explode' ? `<span style="color:#f80">폭발탄두 비활성화됨</span>` : gun.EXCLUSIVE_MODE === 'pierce' ? `<span style="color:#aaa">관통 중점 모드</span>` : `<span style="color:#f80">선택 시 폭발탄두 비활성 (기록 유지)</span>`; return `관통 +1 (누적 기록 ${next}관통) / 기준 데미지 +3<br>${note}`; },
+    short: '관통 +<br>데미지 +',
+    desc: () => {
+      const next = gun.BASE_PIERCE + 1;
+      const note = gun.EXCLUSIVE_MODE === 'explode'
+        ? `<span style="color:#f80">* 폭발탄두 비활성화됨</span>`
+        : gun.EXCLUSIVE_MODE === 'pierce'
+          ? `<span style="color:#aaa">* 관통 중점 모드</span>`
+          : `<span style="color:#f80">* 선택 시 폭발탄두 비활성 (기록 유지)</span>`;
+      return `* 관통 +1 (누적 ${next}관통)<br>* 기준 데미지 +3<br>${note}`;
+    },
     apply: () => { gun.BASE_PIERCE += 1; gun.DMG_BASE += 3; gun.EXCLUSIVE_MODE = 'pierce'; applyCaliberStats(); } },
-  { id: 'magwell', group: 'normal', gun: true, name: '매그웰', desc: () => `재장전 시간 단축<br><span style="color:#aaa">${gun.BASE_RELOAD_TIME.toFixed(1)}s → ${Math.max(0.3, gun.BASE_RELOAD_TIME - 0.3).toFixed(1)}s</span>`, apply: () => { gun.BASE_RELOAD_TIME = Math.max(0.3, gun.BASE_RELOAD_TIME - 0.3); gun.BASE_RELOAD_TIME_FAST = Math.max(0.2, gun.BASE_RELOAD_TIME_FAST - 0.2); applyCaliberStats(); } },
+
+  { id: 'magwell', group: 'normal', gun: true, name: '매그웰',
+    short: '재장전 시간 -',
+    desc: () => `* 재장전 시간 단축<br><span style="color:#aaa">* ${gun.BASE_RELOAD_TIME.toFixed(1)}s → ${Math.max(0.3, gun.BASE_RELOAD_TIME - 0.3).toFixed(1)}s</span>`,
+    apply: () => { gun.BASE_RELOAD_TIME = Math.max(0.3, gun.BASE_RELOAD_TIME - 0.3); gun.BASE_RELOAD_TIME_FAST = Math.max(0.2, gun.BASE_RELOAD_TIME_FAST - 0.2); applyCaliberStats(); } },
+
   { id: 'explode', group: 'normal', gun: true, name: '폭발탄두',
+    short: '폭발 반경 · 데미지 +',
     desc: () => {
       const nextR = gun.BASE_EXPLODE_RADIUS + 0.6;
-      const note = gun.EXCLUSIVE_MODE === 'pierce' ? `<span style="color:#f80">철갑피모 비활성화됨</span>` : gun.EXCLUSIVE_MODE === 'explode' ? `<span style="color:#aaa">폭발 중점 모드</span>` : `<span style="color:#f80">선택 시 철갑피모 비활성 (기록 유지)</span>`;
-      return `폭발 반경 ${gun.BASE_EXPLODE_RADIUS.toFixed(1)} → ${nextR.toFixed(1)} / 기준 데미지 +1 / 폭발 데미지 +2<br>${note}`;
+      const note = gun.EXCLUSIVE_MODE === 'pierce'
+        ? `<span style="color:#f80">* 철갑피모 비활성화됨</span>`
+        : gun.EXCLUSIVE_MODE === 'explode'
+          ? `<span style="color:#aaa">* 폭발 중점 모드</span>`
+          : `<span style="color:#f80">* 선택 시 철갑피모 비활성 (기록 유지)</span>`;
+      return `* 폭발 반경 ${gun.BASE_EXPLODE_RADIUS.toFixed(1)} → ${nextR.toFixed(1)}<br>* 기준 데미지 +1<br>* 폭발 데미지 +2<br>${note}`;
     },
     apply: () => { gun.BASE_EXPLODE_RADIUS += 0.6; gun.DMG_BASE += 1; gun.BASE_EXPLODE_DMG_BONUS = (gun.BASE_EXPLODE_DMG_BONUS||0) + 2; gun.EXCLUSIVE_MODE = 'explode'; applyCaliberStats(); } },
+
   { id: 'heavy_frame', group: 'normal', name: '중량 총몸',
+    short: '근접 ↑<br>연사 --',
     desc: () => {
       const gain = gun._heavyCount === 0 ? 0.1 : 0.05;
       const curCD = gun.BASE_SHOOT_COOLDOWN.toFixed(3);
       const nxtCD = (gun.BASE_SHOOT_COOLDOWN * 1.15).toFixed(3);
-      return `근접 데미지 배수 +${gun._heavyCount === 0 ? 10 : 5}%<br><span style="color:#aaa">x${gun.MELEE_MULT.toFixed(2)} → x${(gun.MELEE_MULT + gain).toFixed(2)}</span><br><span style="color:#f55">연사속도 -15% (${curCD}s → ${nxtCD}s)</span>`;
+      return `* 근접 데미지 배수 +${gun._heavyCount === 0 ? 10 : 5}%<br><span style="color:#aaa">* x${gun.MELEE_MULT.toFixed(2)} → x${(gun.MELEE_MULT + gain).toFixed(2)}</span><br><span style="color:#f55">* 연사속도 -15%<br>* ${curCD}s → ${nxtCD}s</span>`;
     },
-    apply: () => {
-      gun.MELEE_MULT += gun._heavyCount === 0 ? 0.1 : 0.05;
-      gun.BASE_SHOOT_COOLDOWN = gun.BASE_SHOOT_COOLDOWN * 1.15;
-      gun._heavyCount = (gun._heavyCount||0) + 1;
-      applyCaliberStats();
-    } },
+    apply: () => { gun.MELEE_MULT += gun._heavyCount === 0 ? 0.1 : 0.05; gun.BASE_SHOOT_COOLDOWN = gun.BASE_SHOOT_COOLDOWN * 1.15; gun._heavyCount = (gun._heavyCount||0) + 1; applyCaliberStats(); } },
+
   { id: 'wing_chun', group: 'normal', name: '무술 : 영춘권',
+    short: '근접 공격 간격 -',
     desc: () => {
       const cur = Math.min(0.40, gun._wingChunStacks * 0.08);
       const nxt = Math.min(0.40, (gun._wingChunStacks + 1) * 0.08);
       const curCD = (0.495 * (1 - cur)).toFixed(2);
       const nxtCD = (0.495 * (1 - nxt)).toFixed(2);
-      return `근접 공격 간격 단축 (스택당 8%, 최대 40%)<br><span style="color:#aaa">${curCD}s → ${nxtCD}s</span>`;
+      return `* 근접 공격 간격 단축 (스택당 8%, 최대 40%)<br><span style="color:#aaa">* ${curCD}s → ${nxtCD}s</span>`;
     },
     condition: () => gun._wingChunStacks < 5,
     apply: () => { gun._wingChunStacks++; } },
+
   { id: 'light_receiver', group: 'normal', gun: true, name: '경량 리시버',
+    short: '연사속도 +<br>근접 +-',
     desc: () => {
       const curCD = gun.BASE_SHOOT_COOLDOWN.toFixed(3);
       const nxtCD = (gun.BASE_SHOOT_COOLDOWN * 0.82).toFixed(3);
       const curMelee = gun.MELEE_MULT.toFixed(2);
       const nxtMelee = (gun.MELEE_MULT * 0.92).toFixed(2);
-      return `연사속도 상승 / 근접 공격력 소폭 감소<br><span style="color:#aaa">쿨타임 ${curCD}s → ${nxtCD}s</span><br><span style="color:#f55">근접 배수 x${curMelee} → x${nxtMelee} (-8%)</span>`;
+      return `* 연사속도 상승<br><span style="color:#aaa">* 쿨타임 ${curCD}s → ${nxtCD}s</span><br><span style="color:#f55">* 근접 배수 x${curMelee} → x${nxtMelee} (-8%)</span>`;
     },
-    apply: () => {
-      gun._lightReceiverStacks++;
-      gun.BASE_SHOOT_COOLDOWN = gun.BASE_SHOOT_COOLDOWN * 0.82;
-      gun.MELEE_MULT = gun.MELEE_MULT * 0.92;
-      applyCaliberStats();
-    } },
-  { id: 'extra_mag', group: 'normal', gun: true, name: '탄창 추가 지급', desc: () => `다음 스테이지 시작 시<br><span style="color:#aaa">여분 탄창 +2</span>`, apply: () => { gun._extraMags = (gun._extraMags || 0) + 2; } },
+    apply: () => { gun._lightReceiverStacks++; gun.BASE_SHOOT_COOLDOWN = gun.BASE_SHOOT_COOLDOWN * 0.82; gun.MELEE_MULT = gun.MELEE_MULT * 0.92; applyCaliberStats(); } },
 
-  // 약실 교체
-  { id: 'caliber_12g', group: 'caliber', gun: true, name: '약실교체 : 12게이지',
-    desc: () => `근거리 산탄 — 펠릿 8발 개별 명중 판정<br><span style="color:#aaa">장탄수 x0.5 / 연사력 대폭 감소 / 관통 없음 / 펠릿당 소데미지</span>`,
-    apply: () => { gun.CALIBER = '12gauge'; applyCaliberStats(); } },
-  { id: 'caliber_20mm', group: 'caliber', gun: true, name: '약실교체 : 20mm',
-    desc: () => `강력한 대구경 — 베이스 데미지 2배, 폭발 강화<br><span style="color:#aaa">장탄수 x0.7 / 관통 최소 2 / 폭발반경 x1.5 / 데미지 x2</span>`,
-    apply: () => { gun.CALIBER = '20mm'; applyCaliberStats(); } },
-  { id: 'caliber_9mm', group: 'caliber', gun: true, name: '약실교체 : 9mm',
-    desc: () => `높은 연사·장탄수, 데미지 소폭 감소<br><span style="color:#aaa">장탄수 x1.5 / 연사력 x1.5 / 기준 데미지 -3 / 폭발반경 x0.6</span>`,
-    apply: () => { gun.CALIBER = '9mm'; gun.DMG_BASE = Math.max(4, gun.DMG_BASE - 3); applyCaliberStats(); } },
+  { id: 'extra_mag', group: 'normal', gun: true, name: '탄창 추가 지급',
+    short: '여분 탄창 +',
+    desc: () => `* 다음 스테이지 시작 시 여분 탄창 +2<br><span style="color:#aaa">* 현재 여분: ${gun._extraMags || 0}개 → ${(gun._extraMags || 0) + 2}개</span>`,
+    apply: () => { gun._extraMags = (gun._extraMags || 0) + 2; } },
 
-  { id: 'caliber_45', group: 'caliber', gun: true, name: '약실교체 : .45구경',
-    desc: () => `원래 약실로 복귀 — 공속·장탄수 기본값으로 원복<br><span style="color:#aaa">현재: ${gun.CALIBER} → .45구경 / 모든 약실 수식 제거</span>`,
-    condition: () => gun.CALIBER !== '45cal',
-    apply: () => { gun.CALIBER = '45cal'; applyCaliberStats(); } },
-
-  // 흑마술 기믹
-  { id: 'dm_offering',    group: 'darkmagic', name: '흑마술 : 공양',
-    desc: () => `적 처치 시 체력/아머/탄약 중 무작위 2종 회복<br><span style="color:#aaa">스택 ${gun.dmOffering} → ${gun.dmOffering+1} / 회복량 ${5*gun.dmOffering} → ${5*(gun.dmOffering+1)}</span>`,
-    apply: () => { gun.dmOffering++; } },
-  { id: 'dm_expansion',   group: 'darkmagic', name: '흑마술 : 팽창',
-    desc: () => {
-      const cur = (3.0 * gun.dmExpansion).toFixed(1);
-      const nxt = (3.0 * (gun.dmExpansion+1)).toFixed(1);
-      return `공격 명중 시 대상 위치에 보라색 대폭발<br><span style="color:#aaa">스택 ${gun.dmExpansion} → ${gun.dmExpansion+1} / 확률 ${cur}% → ${nxt}% / 데미지 +${gun.dmExpansion*3}% → +${(gun.dmExpansion+1)*3}%</span><br><span style="color:#f80">플레이어도 피해를 입을 수 있음</span>`;
-    },
-    apply: () => { gun.dmExpansion++; } },
-  { id: 'dm_compression', group: 'darkmagic', name: '흑마술 : 압축',
-    desc: () => {
-      const cur = (3.0 * gun.dmCompression).toFixed(1);
-      const nxt = (3.0 * (gun.dmCompression+1)).toFixed(1);
-      return `공격 명중 시 대상에게 강력한 추가 데미지<br><span style="color:#aaa">스택 ${gun.dmCompression} → ${gun.dmCompression+1} / 확률 ${cur}% → ${nxt}% / 데미지 +${gun.dmCompression*3}% → +${(gun.dmCompression+1)*3}%</span>`;
-    },
-    apply: () => { gun.dmCompression++; } },
-
-  //---/// 신규 업그레이드 ///---
   { id: 'auto_fire', group: 'normal', gun: true, name: '기계화 총몸',
-    desc: () => `마우스를 누르고 있으면 자동 연사<br><span style="color:#aaa">${gun.autoFire ? '이미 보유 중' : '미보유'}</span>`,
+    short: '자동 연사 해금',
+    desc: () => `* 마우스 버튼을 누르는 동안 자동으로 연사<br><span style="color:#aaa">* 1회 획득 가능</span>`,
     condition: () => !gun.autoFire,
     apply: () => { gun.autoFire = true; } },
 
   { id: 'gun_jutsu', group: 'normal', gun: true, name: '무술 : GUN법',
-    desc: () => `재장전 시간을 0.2초로 단축<br><span style="color:#aaa">현재 ${gun.BASE_RELOAD_TIME.toFixed(1)}s → 0.2s (최솟값 도달 후 해금)</span>`,
+    short: '재장전 --',
+    desc: () => `* 재장전 시간을 0.2초로 고정<br><span style="color:#aaa">* ${gun.BASE_RELOAD_TIME.toFixed(1)}s → 0.2s</span><br><span style="color:#888">* 재장전 속도가 한계에 달했을 때 해금</span>`,
     condition: () => gun.BASE_RELOAD_TIME <= 0.3 && !gun._gunJutsu,
     apply: () => { gun._gunJutsu = true; gun.BASE_RELOAD_TIME = 0.2; gun.BASE_RELOAD_TIME_FAST = 0.15; applyCaliberStats(); } },
 
   { id: 'melee_stunn', group: 'normal', name: '무술 : 촌경',
-    desc: () => `근접공격 데미지 +5 및 기절(1.5초)<br><span style="color:#aaa">${gun.meleeStunn ? '이미 보유 중' : '미보유'}</span>`,
+    short: '근접 +<br>기절 부여',
+    desc: () => `* 근접공격 시 적을 1.5초간 기절<br>* 근접 데미지 배수 +30%<br><span style="color:#888">* 1회 획득 가능</span>`,
     condition: () => !gun.meleeStunn,
     apply: () => { gun.meleeStunn = true; gun.MELEE_MULT += 0.3; } },
 
+  //---/// 약실 교체 ///---
+  { id: 'caliber_12g', group: 'caliber', gun: true, name: '약실교체 : 12게이지',
+    short: '근거리 산탄<br>연사 -- / 관통 없음',
+    desc: () => `* 탄 1발이 8개의 펠릿으로 분산 발사<br>* 각 펠릿 개별 명중·데미지 판정<br><span style="color:#f55">* 탄창 용량 x0.5<br>* 연사력 대폭 감소<br>* 관통 불가</span>`,
+    apply: () => { gun.CALIBER = '12gauge'; applyCaliberStats(); } },
+
+  { id: 'caliber_20mm', group: 'caliber', gun: true, name: '약실교체 : 20mm',
+    short: '데미지 ++<br>폭발 +',
+    desc: () => `* 베이스 데미지 x2<br>* 관통 최소 2<br>* 폭발 반경 x1.5<br><span style="color:#f55">* 탄창 용량 x0.7<br>* 연사력 감소</span>`,
+    apply: () => { gun.CALIBER = '20mm'; applyCaliberStats(); } },
+
+  { id: 'caliber_9mm', group: 'caliber', gun: true, name: '약실교체 : 9mm',
+    short: '연사 · 탄창 ++<br>데미지 -',
+    desc: () => `* 탄창 용량 x1.5<br>* 연사력 x1.5<br><span style="color:#f55">* 기준 데미지 -3<br>* 폭발 반경 x0.6</span>`,
+    apply: () => { gun.CALIBER = '9mm'; gun.DMG_BASE = Math.max(4, gun.DMG_BASE - 3); applyCaliberStats(); } },
+
+  { id: 'caliber_45', group: 'caliber', gun: true, name: '약실교체 : .45구경',
+    short: '약실 초기화',
+    desc: () => `* 약실을 기본 .45구경으로 복귀<br>* 공속·장탄수 모든 약실 보정 제거<br><span style="color:#aaa">* 현재: ${gun.CALIBER} → .45구경</span>`,
+    condition: () => gun.CALIBER !== '45cal',
+    apply: () => { gun.CALIBER = '45cal'; applyCaliberStats(); } },
+
+  //---/// 흑마술 ///---
+  { id: 'dm_offering', group: 'darkmagic', name: '흑마술 : 공양',
+    short: '처치 시 회복 +',
+    desc: () => `* 적 처치 시 체력·아머·탄약 중 2종 무작위 회복<br><span style="color:#aaa">* 스택 ${gun.dmOffering} → ${gun.dmOffering+1}<br>* 회복량 ${5*(gun.dmOffering)} → ${5*(gun.dmOffering+1)} (종당)</span>`,
+    apply: () => { gun.dmOffering++; } },
+
+  { id: 'dm_expansion', group: 'darkmagic', name: '흑마술 : 팽창',
+    short: '명중 시 폭발 (확률)',
+    desc: () => {
+      const cur = (3.0 * gun.dmExpansion).toFixed(1);
+      const nxt = (3.0 * (gun.dmExpansion+1)).toFixed(1);
+      return `* 명중 시 ${nxt}% 확률로 보라색 암흑 폭발<br>* 폭발은 플레이어에게도 피해<br><span style="color:#aaa">* 스택 ${gun.dmExpansion} → ${gun.dmExpansion+1}<br>* 발동 확률 ${cur}% → ${nxt}%</span>`;
+    },
+    apply: () => { gun.dmExpansion++; } },
+
+  { id: 'dm_compression', group: 'darkmagic', name: '흑마술 : 압축',
+    short: '명중 시 데미지 +<br>사망 시 아이템 변환 (확률)',
+    desc: () => {
+      const cur = (3.0 * gun.dmCompression).toFixed(1);
+      const nxt = (3.0 * (gun.dmCompression+1)).toFixed(1);
+      return `* 명중 시 ${nxt}% 확률로 데미지 x8 폭발적 증폭<br>* 적 사망 시 사체를 랜덤 아이템으로 변환<br><span style="color:#aaa">* 스택 ${gun.dmCompression} → ${gun.dmCompression+1}<br>* 발동 확률 ${cur}% → ${nxt}%</span>`;
+    },
+    apply: () => { gun.dmCompression++; } },
+
   { id: 'lightning', group: 'darkmagic', name: '마술 : 라이트닝',
-    desc: () => { const next = gun.lightningChain + 1; return `적 피격 시 <b>18%</b> 확률로 10데미지 전격 (5u 내 튕김)<br><span style="color:#aaa">현재 ${gun.lightningChain}튕김 → ${next}튕김 (최대 5) / 즉사 없음</span>`; },
+    short: '명중 시 전격 (35%)',
+    desc: () => { const next = gun.lightningChain + 1; return `* 명중 시 35% 확률로 전격 발동<br>* 22 데미지, 5칸 이내 적으로 최대 ${next}회 연쇄<br><span style="color:#aaa">* 전격은 즉사 불가 (최소 HP 1 유지)<br>* 현재 ${gun.lightningChain}회 → ${next}회 연쇄 (최대 5)</span>`; },
     condition: () => gun.lightningChain < 5,
     apply: () => { gun.lightningChain++; } },
 
   { id: 'frozen', group: 'darkmagic', name: '마술 : 프로즌',
-    desc: () => { const next = gun.frozenDur + 1; return `적 피격 시 <b>15%</b> 확률로 ${next}초간 빙결<br><span style="color:#aaa">현재 ${gun.frozenDur}초 → ${next}초 (최대 5초)</span>`; },
+    short: '명중 시 빙결 (30%)',
+    desc: () => { const next = gun.frozenDur + 1; return `* 명중 시 30% 확률로 적을 빙결<br>* 빙결 중 이동·공격 불가<br><span style="color:#aaa">* 지속시간 ${gun.frozenDur}초 → ${next}초 (최대 5초)<br>* 보스는 지속시간 50% 감소</span>`; },
     condition: () => gun.frozenDur < 5,
     apply: () => { gun.frozenDur++; } },
 
   { id: 'scorch', group: 'darkmagic', name: '마술 : 스코치',
-    desc: () => { const next = gun.scorchDur + 1; return `공격 명중 시 <b>25%</b> 확률로 화상 — ${next}초간 매초 10 데미지<br><span style="color:#aaa">현재 ${gun.scorchDur}초 → ${next}초 (최대 5초) / 적이 불에 타는 동안 오렌지 이펙트</span>`; },
+    short: '명중 시 화상 (40%)',
+    desc: () => { const next = gun.scorchDur + 1; return `* 명중 시 40% 확률로 화상 부여<br>* 매 1초마다 20 데미지<br><span style="color:#aaa">* 지속시간 ${gun.scorchDur}초 → ${next}초 (최대 5초)</span>`; },
     condition: () => gun.scorchDur < 5,
-    apply: () => { gun.scorchDur++; } }
+    apply: () => { gun.scorchDur++; } },
 ];
 
 function showUpgradeUI(onDone) {
@@ -2340,14 +2480,29 @@ function showUpgradeUI(onDone) {
   // 버튼이 뜨자마자 눌리는 것을 방지하기 위해 잠깐 동안 pointer-events를 none으로 설정
   choicesEl.style.pointerEvents = 'none';
 
+  const tooltip = document.getElementById('up-tooltip-global');
   picks.forEach(up => {
     let btnClass = 'upgrade-btn';
     if (up.group === 'caliber') btnClass += ' caliber-btn';
     if (up.group === 'darkmagic') btnClass += ' darkmagic-btn';
-    
+
     const btn = document.createElement('button'); btn.className = btnClass;
-    btn.innerHTML = `<span class="up-name">${up.name}</span><span class="up-desc">${up.desc()}</span>`;
+    btn.innerHTML = `<span class="up-name">${up.name}</span><span class="up-short">${up.short || ''}</span>`;
+    //---/// 툴팁: 전역 div에 내용 주입 후 마우스 위치에 표시 ///---
+    btn.addEventListener('mouseenter', () => {
+      tooltip.innerHTML = up.desc();
+      tooltip.style.display = 'block';
+    });
+    btn.addEventListener('mousemove', ev => {
+      const x = ev.clientX + 16, y = ev.clientY - 10;
+      tooltip.style.left = Math.min(x, window.innerWidth - 300) + 'px';
+      tooltip.style.top  = Math.max(y, 4) + 'px';
+    });
+    btn.addEventListener('mouseleave', () => {
+      tooltip.style.display = 'none';
+    });
     btn.addEventListener('click', () => {
+      tooltip.style.display = 'none';
       up.apply();
       //---/// 총기 관련 업그레이드 선택 시 베이스 공격력 1% 상승 ///---
       if (up.gun) gun.DMG_BASE = Math.round(gun.DMG_BASE * 1.01 * 100) / 100;
@@ -2411,7 +2566,15 @@ function gameLoop(timestamp) {
 
   const dt = Math.min((timestamp - lastTime) / 1000, 0.05); lastTime = timestamp;
 
-  if (portal) portal.time += dt;
+  if (portal) {
+    portal.time += dt;
+    //---/// 포탈 서서히 생성 진행 ///---
+    if (portal.spawning) {
+      portal.spawnProgress = Math.min(1, (portal.spawnProgress || 0) + dt * 0.4);
+      if (portal.beamTimer > 0) portal.beamTimer -= dt;
+      if (portal.spawnProgress >= 1) { portal.spawning = false; portal.active = true; }
+    }
+  }
 
   if (state.fadeOut > 0) {
     state.fadeOut -= dt; state.fadeAlpha = Math.min(1, 1 - state.fadeOut / 0.8);
@@ -2427,7 +2590,7 @@ function gameLoop(timestamp) {
 
   const bobY = Math.sin(player.bobPhase) * player.bobAmt * 4;
   const zBuffer = castRays(bobY);
-  renderSprites(zBuffer, bobY); renderGun(); renderCrosshair(); renderDamageFlash(dt); renderCompass(); renderPellets(dt);
+  renderSprites(zBuffer, bobY); renderGun(); renderCrosshair(); renderDamageFlash(dt); renderPellets(dt); renderPortalBeam();
 
   if (portal && Math.hypot(portal.x - player.x, portal.y - player.y) < 1.5 && state.fadeOut === 0) {
     ctx.save();
@@ -2479,12 +2642,30 @@ function applySensitivity(val) {
   const vp = document.getElementById('sens-val-pause');
   if (vp) vp.textContent = val;
 }
-document.getElementById('sens-slider-main').addEventListener('input', function() {
-  applySensitivity(parseInt(this.value));
+document.addEventListener('DOMContentLoaded', () => {
+  const sm = document.getElementById('sens-slider-main');
+  if (sm) sm.addEventListener('input', function() { applySensitivity(parseInt(this.value)); });
 });
 //---/// 일시정지 슬라이더: 동적 DOM이므로 이벤트 위임 ///---
 document.addEventListener('input', e => {
   if (e.target && e.target.id === 'sens-slider-pause') applySensitivity(parseInt(e.target.value));
+  //---/// BGM 볼륨 슬라이더 위임 ///---
+  if (e.target && e.target.id === 'bgm-vol-slider') {
+    const val = parseInt(e.target.value) / 100;
+    _bgmVol = val; _bgmMuted = false;
+    BGM.setVolume(val);
+    const v = document.getElementById('bgm-vol-val'); if (v) v.textContent = e.target.value;
+    const btn = document.getElementById('bgm-mute-btn'); if (btn) btn.textContent = 'MUTE';
+  }
+});
+//---/// BGM 음소거 버튼 위임 ///---
+document.addEventListener('click', e => {
+  if (e.target && e.target.id === 'bgm-mute-btn') {
+    e.stopPropagation();
+    _bgmMuted = !_bgmMuted;
+    BGM.setVolume(_bgmMuted ? 0 : _bgmVol);
+    e.target.textContent = _bgmMuted ? 'UNMUTE' : 'MUTE';
+  }
 });
 
 document.getElementById('start-btn').addEventListener('click', () => {
