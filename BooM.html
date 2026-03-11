@@ -746,8 +746,10 @@ class ShooterEnemy {
 class BossEnemy {
   constructor(x, y) {
     this.x = x; this.y = y;
+    this.spawnX = x; this.spawnY = y; //---/// 스폰 위치 기억 (2페이즈 복귀용) ///---
     const g = Math.pow(1.12, state.stage - 1);
-    this.hp = Math.round(enemyScale.hp * 8 * g); this.maxHp = this.hp;
+    //---/// 최대 체력: 일반몹 5배 ///---
+    this.hp = Math.round(enemyScale.hp * 5 * g); this.maxHp = this.hp;
     this.active = true; this.state = 'chase'; this.alertTimer = 99;
     this.attackCooldown = 0; this.inContact = false;
     this.shootCooldown = 1.5; this.chargeTime = 0;
@@ -756,40 +758,19 @@ class BossEnemy {
     this.isBoss = true; this.phase = 1;
     this.stunTimer = 0; this.frozenTimer = 0;
     this.invulnTimer = 0;
+    this._engaged = false; //---/// 플레이어가 한 번이라도 진입했으면 true, 이후 영구 추적 ///---
+    this._regenPhase = false; //---/// 체력 재생 중 플래그 ///---
+    this._regenTimer = 0;     //---/// 재생 경과 시간 ///---
+    this._regenDuration = 8.0; //---/// 체력 전체 재생에 걸리는 시간(초) ///---
+    this._waitingMinions = false; //---/// 잡몹 전멸 대기 플래그 ///---
+    this._phaseCount = 0; //---/// 페이즈 2 진입 횟수 ///---
   }
   getSpeed() {
     const base = enemyScale.speed * 0.75;
-    if (this.phase === 2) return base * 1.4;
+    if (this.phase === 2) return base * 1.5;
     return base;
   }
-  updatePhase() {
-    const pct = this.hp / this.maxHp;
-    //---/// 2페이즈: HP 50% 이하 ///---
-    const newPhase = pct > 0.5 ? 1 : 2;
-    if (newPhase > this.phase) {
-      this.phase = newPhase;
-      this.hitFlash = 1.0;
-      this.invulnTimer = 5.0; //---/// 페이즈 전환 시 5초 무적 ///---
-      //---/// 검붉은 파티클 분출 ///---
-      for (let i = 0; i < 12; i++) {
-        const ang = Math.random() * Math.PI * 2;
-        const spd = 1.5 + Math.random() * 2.5;
-        particles.push({ x: this.x, y: this.y, vx: Math.cos(ang)*spd, vy: Math.sin(ang)*spd, life: 0.5 + Math.random()*0.4, color: Math.random() < 0.5 ? '#600' : '#3a0000' });
-      }
-      //---/// 페이즈 전환마다 랜덤 아이템 4개 소환 ///---
-      const phaseItemTypes = ['health','armor','ammo','health'];
-      for (let i = 0; i < 4; i++) {
-        for (let t = 0; t < 200; t++) {
-          const ix = 1 + Math.floor(Math.random() * (MAP_W - 2));
-          const iy = 1 + Math.floor(Math.random() * (MAP_H - 2));
-          if (currentMap[iy][ix] !== 0) continue;
-          if (Math.hypot(ix + 0.5 - player.x, iy + 0.5 - player.y) < 1.5) continue;
-          items.push(new Item(ix + 0.5, iy + 0.5, phaseItemTypes[i]));
-          break;
-        }
-      }
-    }
-  }
+  //---/// 페이즈 체크는 외부 updateBossPhase()로 이관 ///---
 }
 
 //---/// 적 총알 오브젝트 배열 ///---
@@ -1004,8 +985,13 @@ function spawnEntities(rooms) {
       }
     }
   }
-  //---/// 보스 스테이지: 포털은 처음에 잠김 — 보스 처치 후 열림 ///---
-  if (bestPortal) portal = { x: bestPortal.x, y: bestPortal.y, time: 0, active: state.stage % 5 !== 0 };
+  if (state.stage % 5 === 0) {
+    //---/// 보스 스테이지: 포탈 없음 — 보스 처치 후 비콘 위치에 생성 ///---
+    portal = null;
+  } else {
+    //---/// 일반 스테이지: 포탈 고정 배치, 비활성 상태로 시작 ///---
+    if (bestPortal) portal = { x: bestPortal.x, y: bestPortal.y, time: 0, active: false };
+  }
 }
 
 function initGame() {
@@ -1155,13 +1141,57 @@ function applyDamage(en, dmg, isExplosion = false, isPlayerAttack = false) {
   spawnBlood(en.x, en.y, 3);
 
   if (willExpand) triggerDarkExplosion(en.x, en.y);
-  if (en.hp <= 0) handleEnemyKill(en);
+  if (en.hp <= 0) {
+    if (en.isBoss) triggerBossRegen(en);
+    else handleEnemyKill(en);
+  }
 }
 
 //---/// 레벨업 시 베이스 공격력 5% 상승 ///---
 function applyLevelUpBonus() {
   gun.DMG_BASE = Math.round(gun.DMG_BASE * 1.05 * 100) / 100;
 }
+
+function triggerBossRegen(en) {
+  //---/// 보스 HP 소진 → 체력 재생 1회만, 이후 진짜 처치 ///---
+  en._phaseCount = (en._phaseCount || 0) + 1;
+  if (en._phaseCount > 1) {
+    //---/// 2번째 이후 HP 소진 = 최종 처치 ///---
+    en._dead2 = true;
+    handleEnemyKill(en);
+    return;
+  }
+  en.hp = 1; //---/// 1로 고정, 재생 시작 ///---
+  en._regenPhase = true;
+  en._regenTimer = 0;
+  en.invulnTimer = en._regenDuration + 2.0; //---/// 재생 중 무적 ///---
+  en.hitFlash = 1.0;
+  //---/// 강렬한 파티클 ///---
+  for (let i = 0; i < 20; i++) {
+    const ang = Math.random() * Math.PI * 2;
+    const spd = 2.0 + Math.random() * 3.0;
+    particles.push({ x: en.x, y: en.y, vx: Math.cos(ang)*spd, vy: Math.sin(ang)*spd,
+      life: 0.6 + Math.random()*0.5, color: Math.random() < 0.5 ? '#ff2200' : '#880000' });
+  }
+  //---/// 잡몹 8~12마리 아레나 내 스폰 ///---
+  const minionCount = 8 + Math.floor(Math.random() * 5);
+  for (let i = 0; i < minionCount; i++) {
+    for (let t = 0; t < 300; t++) {
+      const mx = 1 + Math.floor(Math.random() * (MAP_W - 2));
+      const my = 1 + Math.floor(Math.random() * (MAP_H - 2));
+      if (currentMap[my][mx] !== 0) continue;
+      const mdist = Math.hypot(mx + 0.5 - player.x, my + 0.5 - player.y);
+      if (mdist < 2.0) continue; //---/// 플레이어 너무 가까이엔 스폰 금지 ///---
+      const mdistBoss = Math.hypot(mx + 0.5 - en.x, my + 0.5 - en.y);
+      if (mdistBoss > 10) continue; //---/// 보스 주변 10u 이내에만 스폰 ///---
+      if (i % 3 === 2) enemies.push(new ShooterEnemy(mx + 0.5, my + 0.5));
+      else enemies.push(new Enemy(mx + 0.5, my + 0.5));
+      break;
+    }
+  }
+  updateHUD();
+}
+
 
 function handleEnemyKill(en) {
   en.hp = 0; en.state = 'dead'; en.active = false;
@@ -1172,9 +1202,14 @@ function handleEnemyKill(en) {
   state.health = Math.min(100, state.health + hpGain);
   state.armor  = Math.min(50,  state.armor  + armGain);
 
-  //---/// 보스 처치: 포털 개방 + 대형 경험치 + 아이템 종류별 3개 드랍 ///---
+  //---/// 보스 최종 처치: 포털 개방 + 비콘 위치에 포탈 서서히 생성 ///---
   if (en.isBoss) {
-    if (portal) portal.active = true;
+    //---/// 비콘(보스 사망 위치) 에 포탈 서서히 생성 ///---
+    portal = {
+      x: en.x, y: en.y, time: 0, active: false,
+      spawning: true, spawnProgress: 0,
+      beamTimer: 3.0, beamX: en.x, beamY: en.y
+    };
     state.score += 1000 * state.stage;
     const bossExpGain = state.maxExp * 1.5;
     state.exp += bossExpGain;
@@ -1563,7 +1598,7 @@ function updateEnemies(dt) {
           en.hp -= 20;
           en.hitFlash = 0.6;
           spawnBlood(en.x, en.y, 2);
-          if (en.hp <= 0) handleEnemyKill(en);
+          if (en.hp <= 0) { if (en.isBoss) triggerBossRegen(en); else handleEnemyKill(en); }
         }
       }
     }
@@ -1653,29 +1688,79 @@ function updateEnemies(dt) {
       return; // ShooterEnemy는 근접 공격 로직 생략
     }
 
-    //---/// BossEnemy 전용 AI — 근접 돌진 + 광역 총알 산탄 ///---
+    //---/// BossEnemy 전용 AI ///---
     if (en.isBoss) {
-      en.updatePhase();
-      if (en.invulnTimer > 0) en.invulnTimer = Math.max(0, en.invulnTimer - dt);
-      const spd = en.getSpeed();
       const BOSS_R = 0.5;
-      const ARENA_ENGAGE_DIST = 7.0; //---/// 이 거리 이내로 들어와야 보스가 움직이기 시작 ///---
-      let moveX = 0, moveY = 0;
+      const ARENA_ENGAGE_DIST = 8.0;
+
+      //---/// 진입 감지: 한 번 들어오면 영구 추적 ///---
+      if (!en._engaged && dist < ARENA_ENGAGE_DIST) en._engaged = true;
+
+      if (en.invulnTimer > 0) en.invulnTimer = Math.max(0, en.invulnTimer - dt);
+
+      //---/// 페이즈 2: 체력 재생 + 잡몹 대기 ///---
+      if (en._regenPhase) {
+        //---/// 보스 중심으로 이동 ///---
+        const tdx = en.spawnX - en.x, tdy = en.spawnY - en.y;
+        const tdist = Math.hypot(tdx, tdy);
+        if (tdist > 0.15) {
+          const spd2 = en.getSpeed() * 0.6;
+          const nx = en.x + (tdx/tdist) * spd2 * dt;
+          const ny = en.y + (tdy/tdist) * spd2 * dt;
+          if (!isWall(nx + Math.sign(tdx) * BOSS_R, en.y)) en.x = nx;
+          if (!isWall(en.x, ny + Math.sign(tdy) * BOSS_R)) en.y = ny;
+        }
+        //---/// 체력 서서히 재생 ///---
+        en._regenTimer += dt;
+        const regenFrac = Math.min(1, en._regenTimer / en._regenDuration);
+        en.hp = Math.round(en.maxHp * regenFrac);
+        en.hitFlash = Math.max(en.hitFlash - dt * 2, 0);
+        //---/// 재생 파티클 ///---
+        if (Math.random() < dt * 8) {
+          const ang2 = Math.random() * Math.PI * 2;
+          particles.push({ x: en.x + Math.cos(ang2)*0.4, y: en.y + Math.sin(ang2)*0.4,
+            vx: Math.cos(ang2)*0.3, vy: Math.sin(ang2)*0.3 - 0.5,
+            life: 0.5 + Math.random()*0.3, color: Math.random() < 0.5 ? '#ff4444' : '#aa0000' });
+        }
+        if (regenFrac >= 1) {
+          //---/// 재생 완료: 잡몹 남아있으면 대기, 없으면 전투 복귀 ///---
+          en._regenPhase = false;
+          const minionsLeft = enemies.filter(e => !e.isBoss && e.active && e.hp > 0).length;
+          en._waitingMinions = minionsLeft > 0;
+          if (!en._waitingMinions) { en.phase = 2; en.invulnTimer = 1.5; }
+        }
+        return;
+      }
+
+      //---/// 잡몹 대기 중 ///---
+      if (en._waitingMinions) {
+        const minionsLeft = enemies.filter(e => !e.isBoss && e.active && e.hp > 0).length;
+        if (minionsLeft === 0) {
+          en._waitingMinions = false;
+          en.phase = 2; en.invulnTimer = 1.5;
+        } else {
+          //---/// 대기 중엔 중심에서 제자리 ///---
+          en.hitFlash = Math.max(en.hitFlash - dt * 2, 0);
+          return;
+        }
+      }
+
+      //---/// 미진입 시 대기 ///---
+      if (!en._engaged) return;
+
+      //---/// 이동: 항상 플레이어 추적 ///---
+      const spd = en.getSpeed();
       const ang = Math.atan2(dy, dx);
-      //---/// 무적 중이거나 플레이어가 아직 멀면 제자리 대기 ///---
-      if (en.invulnTimer <= 0 && dist < ARENA_ENGAGE_DIST && dist > BOSS_R + PLAYER_RADIUS) {
-        moveX = Math.cos(ang) * spd * dt;
-        moveY = Math.sin(ang) * spd * dt;
+      if (en.invulnTimer <= 0 && dist > BOSS_R + PLAYER_RADIUS) {
+        const nx = en.x + Math.cos(ang) * spd * dt;
+        const ny = en.y + Math.sin(ang) * spd * dt;
+        if (!isWall(nx + Math.sign(Math.cos(ang)) * BOSS_R, en.y + BOSS_R) &&
+            !isWall(nx + Math.sign(Math.cos(ang)) * BOSS_R, en.y - BOSS_R)) en.x = nx;
+        if (!isWall(en.x + BOSS_R, ny + Math.sign(Math.sin(ang)) * BOSS_R) &&
+            !isWall(en.x - BOSS_R, ny + Math.sign(Math.sin(ang)) * BOSS_R)) en.y = ny;
       }
-      if (moveX !== 0) {
-        const nx = en.x + moveX;
-        if (!isWall(nx + Math.sign(moveX) * BOSS_R, en.y + BOSS_R) && !isWall(nx + Math.sign(moveX) * BOSS_R, en.y - BOSS_R)) en.x = nx;
-      }
-      if (moveY !== 0) {
-        const ny = en.y + moveY;
-        if (!isWall(en.x + BOSS_R, ny + Math.sign(moveY) * BOSS_R) && !isWall(en.x - BOSS_R, ny + Math.sign(moveY) * BOSS_R)) en.y = ny;
-      }
-      //---/// 보스 근접 공격 — 무적 중 불가 ///---
+
+      //---/// 근접 충돌 밀기 + 공격 ///---
       const minDistB = BOSS_R + PLAYER_RADIUS;
       if (en.invulnTimer <= 0 && dist < minDistB && dist > 0.001) {
         const push = (minDistB - dist) / dist;
@@ -1698,7 +1783,8 @@ function updateEnemies(dt) {
           if (state.health <= 0) { state.health = 0; state.dead = true; } updateHUD();
         }
       } else { en.inContact = false; }
-      //---/// 보스 원거리 산탄 — 2페이즈, 무적 중 불가 ///---
+
+      //---/// 원거리 산탄 ///---
       if (en.invulnTimer <= 0) en.shootCooldown -= dt;
       const shootCount    = en.phase === 2 ? 4 : 2;
       const shootInterval = en.phase === 2 ? 1.5 : 2.5;
@@ -1706,7 +1792,7 @@ function updateEnemies(dt) {
         en.shootCooldown = shootInterval;
         const spread = Math.PI / (en.phase === 2 ? 3.0 : 5.0);
         for (let s = 0; s < shootCount; s++) {
-          const a = Math.atan2(dy, dx) - spread / 2 + (s / Math.max(1, shootCount - 1)) * spread;
+          const a = ang - spread / 2 + (s / Math.max(1, shootCount - 1)) * spread;
           enemyBullets.push({ x: en.x, y: en.y, vx: Math.cos(a) * 4.0, vy: Math.sin(a) * 4.0, life: 3.5, shooter: en });
         }
       }
@@ -2619,9 +2705,20 @@ function gameLoop(timestamp) {
     ctx.restore();
   }
   //---/// 보스 스테이지: 포털 잠김 메시지 ///---
-  if (state.stage % 5 === 0 && portal && !portal.active && !state.dead) {
-    const boss = enemies.find(e => e.isBoss && e.hp > 0);
-    if (boss) {
+  if (state.stage % 5 === 0 && (!portal || !portal.active) && !state.dead) {
+    const boss = enemies.find(e => e.isBoss && e.active);
+    //---/// 재생 중 메시지 ///---
+    if (boss && boss._regenPhase) {
+      ctx.save(); ctx.font = '16px Share Tech Mono'; ctx.textAlign = 'center';
+      ctx.fillStyle = 'rgba(255,80,80,0.9)'; ctx.shadowColor='#f00'; ctx.shadowBlur=10;
+      ctx.fillText('[ BOSS REGENERATING — CLEAR THE MINIONS ]', SCREEN_W / 2, SCREEN_H - 50);
+      ctx.restore();
+    } else if (boss && boss._waitingMinions) {
+      ctx.save(); ctx.font = '16px Share Tech Mono'; ctx.textAlign = 'center';
+      ctx.fillStyle = 'rgba(255,160,60,0.9)'; ctx.shadowColor='#f80'; ctx.shadowBlur=10;
+      ctx.fillText('[ ELIMINATE ALL MINIONS TO RESUME BOSS FIGHT ]', SCREEN_W / 2, SCREEN_H - 50);
+      ctx.restore();
+    } else if (boss && !boss._regenPhase && !boss._waitingMinions) {
       ctx.save(); ctx.font = '16px Share Tech Mono'; ctx.textAlign = 'center';
       ctx.fillStyle = 'rgba(255,80,80,0.85)'; ctx.shadowColor='#f00'; ctx.shadowBlur=8;
       ctx.fillText('[ VORTEX LOCKED — DEFEAT THE BOSS ]', SCREEN_W / 2, SCREEN_H - 50);
