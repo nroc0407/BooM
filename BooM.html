@@ -787,6 +787,7 @@ const DASH_DURATION = 0.13; const DASH_SPEED = 14; const DASH_COOLDOWN = 0.8; co
 let emptyClickCount = 0; let emptyClickTimer = 0; let footstepTimer = 0;
 
 let portal = null;
+let portal2 = null; //---/// 일반 스테이지 마지막 적 처치 비콘 위치 추가 포탈 ///---
 let damageIndicators = [];
 
 const canvas = document.getElementById('game'); const ctx = canvas.getContext('2d');
@@ -989,8 +990,8 @@ function spawnEntities(rooms) {
     //---/// 보스 스테이지: 포탈 없음 — 보스 처치 후 비콘 위치에 생성 ///---
     portal = null;
   } else {
-    //---/// 일반 스테이지: 포탈 고정 배치, 비활성 상태로 시작 ///---
-    if (bestPortal) portal = { x: bestPortal.x, y: bestPortal.y, time: 0, active: false };
+    //---/// 일반 스테이지: 포탈 처음부터 활성화 ///---
+    if (bestPortal) portal = { x: bestPortal.x, y: bestPortal.y, time: 0, active: true };
   }
 }
 
@@ -1013,7 +1014,7 @@ function initGame() {
   particles = []; muzzleFlash = 0; meleeFlash = 0; damageFlashAlpha = 0; mouseDeltaX = 0;
   dashCooldown = 0; dashActive = 0; dashVX = 0; dashVY = 0; screenPellets = []; enemyBullets = [];
   
-  portal = null; damageIndicators = [];
+  portal = null; portal2 = null; damageIndicators = [];
 
   spawnEntities(gen.rooms); updateHUD();
 }
@@ -1043,7 +1044,7 @@ function loadNextStage() {
   state.countdown = 0; state.countdownVal = 0; state.fadeOut = 0; state.fadeAlpha = 0; state.fadeIn = 0.5;
   particles = []; muzzleFlash = 0; meleeFlash = 0; damageFlashAlpha = 0; screenPellets = []; enemyBullets = [];
   
-  portal = null; damageIndicators = [];
+  portal = null; portal2 = null; damageIndicators = [];
 
   spawnEntities(gen.rooms); updateHUD();
   BGM.setStage();
@@ -1251,16 +1252,14 @@ function handleEnemyKill(en) {
     showUpgradeUI();
   }
 
-  //---/// 마지막 적 처치: 고정 포탈 위치에서 서서히 소환 ///---
+  //---/// 마지막 적 처치: 비콘 위치에 추가 포탈 별도 생성 ///---
   const remaining = enemies.filter(e => e.active && e.hp > 0);
   if (remaining.length === 0 && state.stage % 5 !== 0) {
-    if (portal) {
-      portal.spawning = true;
-      portal.spawnProgress = 0;
-      portal.beamTimer = 2.0; //---/// 빔 연출 지속 ///---
-      portal.beamX = en.x;
-      portal.beamY = en.y;
-    }
+    portal2 = {
+      x: en.x, y: en.y, time: 0, active: false,
+      spawning: true, spawnProgress: 0,
+      beamTimer: 2.0, beamX: en.x, beamY: en.y
+    };
   }
 }
 
@@ -2034,6 +2033,7 @@ function renderSprites(zBuffer, bobY) {
   items.forEach(it => { if (!it.active) return; _sprites.push({ type:'item', obj:it, dist:Math.hypot(it.x-player.x, it.y-player.y) }); });
   particles.forEach(p => _sprites.push({ type:'particle', obj:p, dist:Math.hypot(p.x-player.x, p.y-player.y) }));
   if (portal && portal.active) _sprites.push({ type: 'portal', obj: portal, dist: Math.hypot(portal.x - player.x, portal.y - player.y) });
+  if (portal2 && (portal2.active || portal2.spawning)) _sprites.push({ type: 'portal', obj: portal2, dist: Math.hypot(portal2.x - player.x, portal2.y - player.y) });
   _sprites.sort((a,b) => b.dist-a.dist);
   const sprites = _sprites;
   sprites.forEach(({ type, obj, dist }) => {
@@ -2107,13 +2107,15 @@ function renderSprites(zBuffer, bobY) {
       //---/// 각 원마다 개별 회전: 홀수=정방향 짝수=역방향, 속도 차이 ///---
       const rotSpeeds = [1.7, -1.1, 2.3, -0.8];
       const rotOffsets = [0, Math.PI * 0.25, Math.PI * 0.5, Math.PI * 0.75];
+      //---/// 회전 링 — 흰색 파동 제거, 청록 계열 ///---
+      const ringColors = ['rgba(80,200,255,0.85)','rgba(60,160,255,0.65)','rgba(40,120,220,0.45)','rgba(20,80,180,0.30)'];
       for (let i = 0; i < 4; i++) {
         ctx.save();
         ctx.rotate(obj.time * rotSpeeds[i] + rotOffsets[i]);
         ctx.beginPath();
         ctx.arc(0, 0, sz * (0.2 + i * 0.1), 0, Math.PI * 1.5);
-        ctx.strokeStyle = `rgba(255, 255, 255, ${0.9 - i * 0.2})`;
-        ctx.lineWidth = sz * 0.06;
+        ctx.strokeStyle = ringColors[i];
+        ctx.lineWidth = sz * 0.05;
         ctx.stroke();
         ctx.restore();
       }
@@ -2296,11 +2298,9 @@ function renderCrosshair() {
 }
 
 
-function renderPortalBeam() {
-  //---/// 마지막 적 사망 위치에서 하늘로 솟는 푸른 빔 ///---
-  if (!portal || !portal.beamTimer || portal.beamTimer <= 0) return;
-  const beamAlpha = Math.min(1, portal.beamTimer) * 0.85;
-  const dx = portal.beamX - player.x, dy = portal.beamY - player.y;
+function _drawBeam(beamX, beamY, beamTimer) {
+  const beamAlpha = Math.min(1, beamTimer) * 0.85;
+  const dx = beamX - player.x, dy = beamY - player.y;
   let sa = Math.atan2(dy, dx) - player.angle;
   while (sa >  Math.PI) sa -= Math.PI * 2;
   while (sa < -Math.PI) sa += Math.PI * 2;
@@ -2343,6 +2343,11 @@ function renderPortalBeam() {
   ctx.lineWidth = 2;
   ctx.stroke();
   ctx.restore();
+}
+
+function renderPortalBeam() {
+  if (portal && portal.beamTimer > 0)   _drawBeam(portal.beamX,  portal.beamY,  portal.beamTimer);
+  if (portal2 && portal2.beamTimer > 0) _drawBeam(portal2.beamX, portal2.beamY, portal2.beamTimer);
 }
 
 
@@ -2654,11 +2659,19 @@ function gameLoop(timestamp) {
 
   if (portal) {
     portal.time += dt;
-    //---/// 포탈 서서히 생성 진행 ///---
     if (portal.spawning) {
       portal.spawnProgress = Math.min(1, (portal.spawnProgress || 0) + dt * 0.4);
       if (portal.beamTimer > 0) portal.beamTimer -= dt;
       if (portal.spawnProgress >= 1) { portal.spawning = false; portal.active = true; }
+    }
+  }
+  //---/// portal2 업데이트 ///---
+  if (portal2) {
+    portal2.time += dt;
+    if (portal2.spawning) {
+      portal2.spawnProgress = Math.min(1, (portal2.spawnProgress || 0) + dt * 0.4);
+      if (portal2.beamTimer > 0) portal2.beamTimer -= dt;
+      if (portal2.spawnProgress >= 1) { portal2.spawning = false; portal2.active = true; }
     }
   }
 
@@ -2678,7 +2691,9 @@ function gameLoop(timestamp) {
   const zBuffer = castRays(bobY);
   renderSprites(zBuffer, bobY); renderGun(); renderCrosshair(); renderDamageFlash(dt); renderPellets(dt); renderPortalBeam();
 
-  if (portal && Math.hypot(portal.x - player.x, portal.y - player.y) < 1.5 && state.fadeOut === 0) {
+  const _activePortal = (portal && portal.active && Math.hypot(portal.x - player.x, portal.y - player.y) < 1.5)
+    || (portal2 && portal2.active && Math.hypot(portal2.x - player.x, portal2.y - player.y) < 1.5);
+  if (_activePortal && state.fadeOut === 0) {
     ctx.save();
     ctx.fillStyle = '#fff';
     ctx.font = 'bold 24px Share Tech Mono';
