@@ -44,7 +44,7 @@
     position: absolute; inset: 0; background: rgba(0,0,0,0.85); display: none;
     flex-direction: column; align-items: center; justify-content: center; gap: 16px; z-index: 9;
   }
-  #upgrade-overlay h2 { color: #ff0; font-size: 32px; letter-spacing: 4px; text-shadow: 0 0 16px #ff0; margin-bottom: 4px; }
+  #upgrade-overlay h2 { color: #ff0; font-size: 32px; letter-spacing: 4px; margin-bottom: 4px; }
   #upgrade-overlay .up-sub { color: #666; font-size: 17px; letter-spacing: 2px; margin-top: -10px; }
   .upgrade-btn {
     width: 340px; padding: 18px 22px; background: transparent; border: 1px solid #c00; color: #eee;
@@ -52,26 +52,23 @@
     cursor: pointer; text-align: center; transition: all 0.15s; line-height: 1.7; vertical-align: top;
     font-weight: 600;
   }
-  .upgrade-btn:hover { background: rgba(180,0,0,0.25); border-color: #f00; box-shadow: 0 0 14px #c0000066; }
+  .upgrade-btn:hover { background: rgba(180,0,0,0.25); border-color: #f00; }
   .caliber-btn { border-color: #a06000; }
   .caliber-btn .up-name { color: #d08020; }
-  .caliber-btn:hover { background: rgba(160,96,0,0.25); border-color: #f0a030; box-shadow: 0 0 14px #a0600066; }
+  .caliber-btn:hover { background: rgba(160,96,0,0.25); border-color: #f0a030; }
 
   .magic-btn { border-color: #0066cc; }
-  .magic-btn .up-name { color: #33aaff; text-shadow: 0 0 8px #0066cc; }
-  .magic-btn:hover { background: rgba(0, 102, 204, 0.25); border-color: #66ccff; box-shadow: 0 0 14px #0088ff88; }
+  .magic-btn .up-name { color: #33aaff; }
+  .magic-btn:hover { background: rgba(0, 102, 204, 0.25); border-color: #66ccff; }
   
   .darkmagic-btn { border-color: #8800cc; }
-  .darkmagic-btn .up-name { color: #d455ff; text-shadow: 0 0 8px #8800cc; }
-  .darkmagic-btn:hover { background: rgba(136, 0, 204, 0.25); border-color: #d455ff; box-shadow: 0 0 14px #8800cc88; }
+  .darkmagic-btn .up-name { color: #d455ff; }
+  .darkmagic-btn:hover { background: rgba(136, 0, 204, 0.25); border-color: #d455ff; }
   
-  .ultimate-btn { border-color: #b8860b; animation: goldGlow 1.5s infinite alternate; }
-  .ultimate-btn .up-name { color: #ffd700; text-shadow: 0 0 12px #daa520; font-weight: 900; letter-spacing: 3px; }
-  .ultimate-btn:hover { background: rgba(218, 165, 32, 0.25); border-color: #ffeb66; box-shadow: 0 0 25px #ffd700aa; animation: none; }
-  @keyframes goldGlow {
-    from { box-shadow: 0 0 5px #b8860b44; }
-    to { box-shadow: 0 0 18px #ffd700aa; }
-  }
+  .ultimate-btn { border-color: #b8860b; }
+  .ultimate-btn .up-name { color: #ffd700; font-weight: 900; letter-spacing: 3px; }
+  .ultimate-btn:hover { background: rgba(218, 165, 32, 0.25); border-color: #ffeb66; }
+
   #upgrade-choices { display: flex; flex-direction: row; align-items: flex-start; justify-content: center; gap: 16px; }
   .upgrade-btn .up-name { color: #c00; font-size: 21px; display: block; margin-bottom: 4px; font-weight: 900; letter-spacing: 2px; }
   .upgrade-btn .up-short { color: #999; font-size: 14px; display: block; margin-top: 6px; letter-spacing: 1px; font-weight: 600; }
@@ -4142,7 +4139,7 @@ const UPGRADES = [
       return `* 근접공격 시 적을 1.5초간 기절<br>* 근접 데미지 배수 +30%<br>* 기준 데미지 +4${hint}`;
     },
     apply: () => { gun.MELEE_MULT += 0.3; gun.DMG_BASE += 4; } },
-  { id: 'protection', group: 'normal', name: '불굴의 의지', max: 3,
+  { id: 'protection', group: 'normal', name: '기합', max: 3,
     short: '최대 아머 +<br>아머 자동 회복',
     desc: () => {
       const nxt = UPG('protection') + 1;
@@ -4468,7 +4465,7 @@ function gameLoop(timestamp) {
     //---/// 연사: 기계화 총몸 보유 + 마우스 누름 유지 시 쿨타임마다 자동 발사 ///---
     if (gun.autoFire && mouseLeftDown && state.running && !state.paused && !state.upgrading && !state.dead && document.pointerLockElement === canvas) tryShoot();
     
-    //---/// 무공: 호신강기 아머 자동 회복 (12프레임 = 0.2초 단위 틱) ///---
+    //---/// 근성 아머 자동 회복 (12프레임 = 0.2초 단위 틱) ///---
     if (UPG('protection') > 0 && state.armor < state.maxArmor) {
       player.armorRegenTimer = (player.armorRegenTimer || 0) + dt;
       if (player.armorRegenTimer >= 0.2) {
