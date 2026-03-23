@@ -190,8 +190,14 @@
 </div>
 
 <script>
-Math.hypot = function(dx, dy) {
-  return Math.sqrt(dx * dx + dy * dy);
+// Math.hypot 네이티브 메서드를 사용합니다 (모던 브라우저 모두 지원)
+// 구버전 브라우저 대응이 필요할 경우에만 폴리필을 적용합니다
+if (!Math.hypot) {
+  Math.hypot = function() {
+    var sum = 0;
+    for (var i = 0; i < arguments.length; i++) sum += arguments[i] * arguments[i];
+    return Math.sqrt(sum);
+  };
 };
 
 //---/// Web Audio 사운드 엔진 — 첫 인터랙션 시 생성 (브라우저 autoplay 정책 대응) ///---
@@ -596,8 +602,8 @@ function generateBossMap() {
   const corY1 = Math.floor(spawnY + spawnH / 2);
   for (let x = spawnX + spawnW - 1; x <= corMidX; x++) {
     map[corY1][x] = 0;
-    if (map[corY1-1][x] === 1) map[corY1-1][x] = 1;
-    if (map[corY1+1][x] === 1) map[corY1+1][x] = 1;
+    if (corY1 - 1 > 0 && map[corY1-1][x] === 1) map[corY1-1][x] = 0;
+    if (corY1 + 1 < H - 1 && map[corY1+1][x] === 1) map[corY1+1][x] = 0;
   }
   // 수직 구간: 중간에서 아레나 높이까지
   const corY2 = arenaY + Math.floor(arenaH / 2);
@@ -774,22 +780,17 @@ const gun = {
   BASE_RELOAD_TIME: 1.2, BASE_RELOAD_TIME_FAST: 0.7, BASE_MAG_SIZE: 7, BASE_SHOOT_COOLDOWN: 0.10,
   RELOAD_TIME: 1.8, RELOAD_TIME_FAST: 1.1, MAG_SIZE: 7, SHOOT_COOLDOWN: 0.10,
   DMG_BASE: 16, DMG_VAR: 6, PIERCE: 0, BASE_PIERCE: 0, EXPLODE_RADIUS: 0, BASE_EXPLODE_RADIUS: 0,
-  BASE_EXPLODE_DMG_BONUS: 0, //---/// 폭발탄두 누적 추가 폭발 데미지 ///---
+  BASE_EXPLODE_DMG_BONUS: 0,
   EXCLUSIVE_MODE: null, MELEE_MULT: 1.0, KILL_BONUS_MULT: 1.0, CALIBER: '45cal', _extraMags: 0,
-  RANGE_BONUS: 0,            // 철갑피모 사거리 추가량
-  autoFire: false,          // 기계화 총몸: 마우스 누르면 연사
-  meleeStunn: false,        // 무술:총검술 — 근접 기절
-  lightningChain: 0,        // 마술:라이트닝 — 튕김 횟수 (0=미보유)
-  frozenDur: 0,             // 마술:프로즌 — 빙결 지속시간(초, 0=미보유)
-  scorchDur: 0,             // 마술:스코치 — 화상 스택 (0=미보유)
-  _heavyCount: 0,           // 중량총몸 획득 횟수
-  _wingChunStacks: 0,       // 무술:영춘 스택
-  _lightReceiverStacks: 0, // 경량 리시버 스택 (다회성)
-  dmOffering: 0, dmExpansion: 0, dmCompression: 0,
-  clericMode: false,         // 그라마톤 클레릭 — 양손 이중 권총
-  _clericSide: 0,            // 0=왼손 1=오른손 발사 교번
-  _cleric2ndMag: 6,          // 두 번째 총 탄창
-  _clericFlash: 0,           // 두 번째 총 총구섬광
+  RANGE_BONUS: 0,
+  // autoFire, meleeStunn, lightningChain, frozenDur, scorchDur,
+  // dmOffering, dmExpansion, dmCompression, clericMode, _wingChunStacks
+  // 위 프로퍼티들은 아래 Object.defineProperties에서 getter로 정의됩니다
+  _heavyCount: 0,
+  _lightReceiverStacks: 0,
+  _clericSide: 0,
+  _cleric2ndMag: 6,
+  _clericFlash: 0,
 };
 
 // [NEW] 기존 게임 루프(전투, 이펙트 등) 코드를 전혀 수정하지 않기 위한 게터 브릿지
@@ -929,9 +930,10 @@ let emptyClickCount = 0; let emptyClickTimer = 0; let footstepTimer = 0;
 let screenParticles = [];
 
 let portal = null;
-let portal2 = null; //---/// 일반 스테이지 마지막 적 처치 비콘 위치 추가 포탈 ///---
+let portal2 = null;
 let damageIndicators = [];
 let soulFX = [];
+
 
 const canvas = document.getElementById('game'); const ctx = canvas.getContext('2d');
 const keys = {};
@@ -1358,7 +1360,8 @@ function loadNextStage() {
   state.health = Math.max(state.health, 50);
   state.armor  = Math.max(state.armor,  25);
   state.countdown = 0; state.countdownVal = 0; state.fadeOut = 0; state.fadeAlpha = 0; state.fadeIn = 0.5;
-  particles = []; explosionFX = []; lightningLines = []; muzzleFlash = 0; meleeFlash = 0; damageFlashAlpha = 0; screenPellets = []; enemyBullets = [];
+  particles = []; explosionFX = []; lightningLines = []; soulFX = []; skyStrikes = [];
+  muzzleFlash = 0; meleeFlash = 0; damageFlashAlpha = 0; screenPellets = []; enemyBullets = []; bossAoes = [];
   
   portal = null; portal2 = null; damageIndicators = [];
 
@@ -1381,7 +1384,7 @@ function updateSoulFX(dt) {
   for (let i = 0; i < soulFX.length; i++) {
     const s = soulFX[i];
     s.life -= dt;
-    s.h += dt * 1.5; 
+    s.h += dt * 1.5;
     if (s.life > 0) soulFX[keepCount++] = s;
   }
   soulFX.length = keepCount;
@@ -1665,7 +1668,7 @@ function handleEnemyKill(en) {
         }
       }
       expGain = Math.floor(expGain * (1 + 0.05 * gun.dmOffering));
-      soulFX.push({ x: en.x, y: en.y, life: 1.2, maxLife: 1.2, h: 0, color: Math.random() < 0.5 ? '#90f' : '#3cf' });
+      soulFX.push({ x: en.x, y: en.y, life: 1.5, maxLife: 1.5, en });
     }
   }
 
@@ -2098,8 +2101,8 @@ function tryMelee() {
 }
 
 function spawnBlood(x, y, count) {
-  //---/// 파티클 최대 개수 캡 — 초과 시 생성 억제 ///---
-  if (particles.length > 120) return;
+  //---/// 파티클 최대 개수 캡 — 초과 시 생성 억제 (불똥 제외) ///---
+  if (particles.length > 200) return;
   const cap = Math.min(count, 3);
   for (let i = 0; i < cap; i++) particles.push({ x, y, vx: (Math.random()-0.5)*2, vy: (Math.random()-0.5)*2, life: 0.35+Math.random()*0.25, color: '#a00' });
 }
@@ -2239,7 +2242,7 @@ function updateEnemies(dt) {
       en.compressionTimer = Math.max(0, en.compressionTimer - dt);
       
       // 타이머가 0이 된 순간(= 압축 애니메이션이 끝난 순간) 아이템 팝업 및 소멸!
-      if (en.compressionTimer === 0 && en._pendingCompressionDrop) {
+      if (en.compressionTimer <= 0 && en._pendingCompressionDrop) {
         en._pendingCompressionDrop = false;
         en._completelyVanished = true; // 완전히 가루가 되어 사라졌다는 표시!
         
@@ -2310,7 +2313,7 @@ function updateEnemies(dt) {
               vx: Math.cos(ang)*spd*0.35, vy: Math.sin(ang)*spd - 1.8,
               life: 0.22 + Math.random()*0.18, color: col });
           }
-          if (en.hp <= 0) { if (en.isBoss) triggerBossRegen(en); else handleEnemyKill(en); }
+          if (en.hp <= 0) { if (en.isBoss && !en._dead2) triggerBossRegen(en); else handleEnemyKill(en); }
         }
       }
     }
@@ -2346,8 +2349,7 @@ function updateEnemies(dt) {
           //---/// 선제사격 후 주기사격 쿨타임을 충분히 설정해 연발 방지 ///---
           en.attackCooldown = 2.2 + Math.random() * 1.2;
         }
-        //---/// _firedOnSight는 시야를 완전히 잃었을 때만 리셋 (alertTimer 소진 기준) ///---
-        if (en.state !== 'chase') en._firedOnSight = false;
+        // _firedOnSight 리셋은 순찰 분기(아래)에서만 처리됩니다
 
         //---/// 적정 거리 유지 이동 ///---
         if (dist < RETREAT_DIST) {
@@ -2739,7 +2741,8 @@ function updateEnemyBullets(dt) {
         if (hit || en.hp <= 0) return;
         if (Math.hypot(b.x - en.x, b.y - en.y) < BULLET_RADIUS + 0.323) {
           const rdmg = Math.round(enemyScale.dmg * 2 * gun.MELEE_MULT);
-          applyDamage(en, rdmg);
+          applyDamage(en, rdmg, false, true); // isPlayerAttack=true: 킬 보너스·마법 효과 적용
+          applyMagicEffects(en);
           spawnBlood(en.x, en.y, 4);
           updateHUD(); hit = true;
         }
@@ -2879,9 +2882,14 @@ function updateParticles(dt) {
   let keepCount = 0;
   for (let i = 0; i < particles.length; i++) {
     const p = particles[i];
-    p.x += p.vx * dt; 
-    p.y += p.vy * dt; 
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
     p.life -= dt;
+    if (p.isEmber) {
+      // 불똥: 속도 빠르게 감쇠, 제자리에서 깜빡이며 오래 남음
+      p.vx *= 0.92;
+      p.vy *= 0.92;
+    }
     if (p.life > 0) particles[keepCount++] = p;
   }
   particles.length = keepCount;
@@ -2918,8 +2926,84 @@ function updateExplosionFX(dt) {
   skyStrikes.length = keepCountSky;
 }
 
+function drawEnemyBody(en, screenX, spriteTop, spriteH, halfW, hitAlpha, dc) {
+  dc = dc || ctx; // 기본값: 메인 캔버스
+  if (en.isShooter) {
+    const floatY = Math.sin(Date.now() / 200 + en.x) * spriteH * 0.08;
+    const bodyC = hitAlpha > 0 ? `rgba(255,180,255,1)` : '#2a1a4a';
+    const skinC = hitAlpha > 0 ? `rgba(255,255,255,1)` : '#e0d0f0';
+    const hatC  = '#111';
+
+    dc.fillStyle = hatC;
+    dc.beginPath();
+    dc.moveTo(screenX, spriteTop + floatY - spriteH*0.1);
+    dc.lineTo(screenX - halfW*0.4, spriteTop + floatY + spriteH*0.15);
+    dc.lineTo(screenX + halfW*0.4, spriteTop + floatY + spriteH*0.15);
+    dc.fill();
+    dc.fillRect(screenX - halfW*0.7, spriteTop + floatY + spriteH*0.12, halfW*1.4, spriteH*0.06);
+
+    dc.fillStyle = skinC;
+    dc.fillRect(screenX - halfW*0.25, spriteTop + floatY + spriteH*0.18, halfW*0.5, spriteH*0.25);
+
+    dc.fillStyle = hitAlpha > 0.5 ? '#fff' : '#c080ff';
+    dc.fillRect(screenX - halfW*0.15, spriteTop + floatY + spriteH*0.25, halfW*0.1, spriteH*0.06);
+    dc.fillRect(screenX + halfW*0.05, spriteTop + floatY + spriteH*0.25, halfW*0.1, spriteH*0.06);
+
+    dc.fillStyle = bodyC;
+    dc.beginPath();
+    dc.moveTo(screenX - halfW*0.25, spriteTop + floatY + spriteH*0.4);
+    dc.lineTo(screenX + halfW*0.25, spriteTop + floatY + spriteH*0.4);
+    dc.lineTo(screenX + halfW*0.6,  spriteTop + floatY + spriteH*0.9);
+    dc.lineTo(screenX - halfW*0.6,  spriteTop + floatY + spriteH*0.9);
+    dc.fill();
+
+    const orbPulse = 0.5 + 0.5 * Math.sin(Date.now() / 150);
+    dc.fillStyle = `rgba(180,80,255,${0.7 + 0.3 * orbPulse})`;
+    dc.beginPath();
+    const isCharging = en.chargeTime && en.chargeTime > 0;
+    const orbY = spriteTop + floatY + spriteH*0.45 - (isCharging ? spriteH*0.15 : 0);
+    const orbR = halfW*0.2 + (isCharging ? halfW*0.15 : 0);
+    dc.arc(screenX + halfW*0.5, orbY, orbR, 0, Math.PI*2); dc.fill();
+    dc.fillStyle = '#fff';
+    dc.beginPath(); dc.arc(screenX + halfW*0.5, orbY, orbR*0.4, 0, Math.PI*2); dc.fill();
+
+  } else {
+    const bodyC = hitAlpha > 0 ? `rgba(255,180,180,1)` : '#4a5a3a';
+    const skinC = hitAlpha > 0 ? `rgba(255,255,255,1)` : '#6a8a4a';
+    const eyeC  = hitAlpha > 0.5 ? '#fff' : '#ff0000';
+    const walkAnim = en.frame === 0 ? spriteH*0.05 : -spriteH*0.05;
+
+    dc.fillStyle = skinC;
+    dc.fillRect(screenX - halfW*0.35, spriteTop + spriteH*0.1 + walkAnim*0.5, halfW*0.7, spriteH*0.3);
+
+    dc.fillStyle = eyeC;
+    const eyeOff = en.frame === 0 ? -halfW*0.06 : halfW*0.06;
+    dc.fillRect(screenX - halfW*0.15 + eyeOff, spriteTop + spriteH*0.18 + walkAnim*0.5, halfW*0.1, spriteH*0.08);
+    dc.fillRect(screenX + halfW*0.05 + eyeOff, spriteTop + spriteH*0.18 + walkAnim*0.5, halfW*0.1, spriteH*0.08);
+
+    dc.fillStyle = bodyC;
+    dc.fillRect(screenX - halfW*0.45, spriteTop + spriteH*0.4, halfW*0.9, spriteH*0.45);
+
+    dc.fillStyle = skinC;
+    dc.fillRect(screenX - halfW*0.7,  spriteTop + spriteH*0.45 + walkAnim,  halfW*0.25, spriteH*0.15);
+    dc.fillRect(screenX + halfW*0.45, spriteTop + spriteH*0.5  - walkAnim,  halfW*0.25, spriteH*0.12);
+
+    dc.fillStyle = '#222';
+    dc.fillRect(screenX - halfW*0.3,  spriteTop + spriteH*0.85 + walkAnim, halfW*0.25, spriteH*0.15);
+    dc.fillRect(screenX + halfW*0.05, spriteTop + spriteH*0.85 - walkAnim, halfW*0.25, spriteH*0.15);
+  }
+}
+
 function renderLightningLines() {
   if (lightningLines.length === 0) return;
+
+  //---/// 세그먼트별 순환 색상 팔레트: white / purple / blue ///---
+  const BOLT_PALETTE = [
+    { glow: '#ffffff', core: '#e8f0ff' }, // white
+    { glow: '#aa44ff', core: '#ddb0ff' }, // purple
+    { glow: '#2288ff', core: '#aad4ff' }, // blue
+  ];
+
   lightningLines.forEach(l => {
     //---/// 월드 → 스크린 투영 ///---
     function project(wx, wy) {
@@ -2930,7 +3014,6 @@ function renderLightningLines() {
       if (Math.abs(sa) > HALF_FOV + 0.3) return null;
       const dist = Math.hypot(dx, dy);
       if (dist < 0.1) return null;
-      const corrected = dist * Math.cos(sa);
       const sx = Math.floor(((sa / FOV) + 0.5) * SCREEN_W);
       const sy = Math.floor(SCREEN_H * 0.5);
       return { sx, sy };
@@ -2945,6 +3028,8 @@ function renderLightningLines() {
     const pts = [p1];
     const perpX = -(p2.sy - p1.sy), perpY = p2.sx - p1.sx;
     const perpLen = Math.hypot(perpX, perpY) || 1;
+    //---/// 색상 시작 오프셋: 번개마다 달라 보이도록 생성 시각 기반 랜덤 ///---
+    const colorOffset = Math.floor(Math.random() * BOLT_PALETTE.length);
     for (let i = 1; i < SEG; i++) {
       const t = i / SEG;
       const bx = p1.sx + (p2.sx - p1.sx) * t;
@@ -2955,24 +3040,37 @@ function renderLightningLines() {
     pts.push(p2);
 
     ctx.save();
-    //---/// 글로우 레이어 ///---
-    ctx.shadowColor = '#ffff00';
-    ctx.shadowBlur = 16;
-    ctx.globalAlpha = alpha * 0.85;
-    ctx.strokeStyle = '#ffff00';
-    ctx.lineWidth = 2.5;
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-    ctx.beginPath(); ctx.moveTo(pts[0].sx, pts[0].sy);
-    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].sx, pts[i].sy);
-    ctx.stroke();
-    //---/// 코어 흰색 ///---
-    ctx.shadowBlur = 0;
-    ctx.globalAlpha = alpha;
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(pts[0].sx, pts[0].sy);
-    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].sx, pts[i].sy);
-    ctx.stroke();
+
+    //---/// 세그먼트별 3레이어 렌더 ///---
+    for (let i = 0; i < pts.length - 1; i++) {
+      const c = BOLT_PALETTE[(colorOffset + i) % BOLT_PALETTE.length];
+      const ax = pts[i].sx,   ay = pts[i].sy;
+      const bx = pts[i+1].sx, by = pts[i+1].sy;
+
+      //---/// 레이어 1: 넓은 외곽 글로우 ///---
+      ctx.shadowColor = c.glow;
+      ctx.shadowBlur = 22;
+      ctx.globalAlpha = alpha * 0.45;
+      ctx.strokeStyle = c.glow;
+      ctx.lineWidth = 5.2;
+      ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+
+      //---/// 레이어 2: 중간 글로우 ///---
+      ctx.shadowBlur = 10;
+      ctx.globalAlpha = alpha * 0.85;
+      ctx.strokeStyle = c.glow;
+      ctx.lineWidth = 3.25;
+      ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+
+      //---/// 레이어 3: 코어 ///---
+      ctx.shadowBlur = 0;
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = c.core;
+      ctx.lineWidth = 1.3;
+      ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+    }
+
     ctx.restore();
   });
 }
@@ -3146,7 +3244,11 @@ function addSpriteToPool(type, obj, dist) {
 
 function renderSprites(zBuffer, bobY) {
   _spriteCount = 0; // 풀 인덱스 초기화
-  
+
+  // 공양 soul이 살아있는 enemy → 진행도(p) 맵
+  const soulEnemyMap = new Map();
+  soulFX.forEach(s => { if (s.en) soulEnemyMap.set(s.en, 1 - s.life / s.maxLife); });
+
   enemies.forEach(en => addSpriteToPool('enemy', en, Math.hypot(en.x-player.x, en.y-player.y)));
   enemyBullets.forEach(b => addSpriteToPool('ebullet', b, Math.hypot(b.x-player.x, b.y-player.y)));
   items.forEach(it => { if (it.active) addSpriteToPool('item', it, Math.hypot(it.x-player.x, it.y-player.y)); });
@@ -3173,12 +3275,35 @@ function renderSprites(zBuffer, bobY) {
       const ri = Math.min(NUM_RAYS-1, Math.max(0, Math.round(screenX * NUM_RAYS / SCREEN_W)));
       if (corrected < zBuffer[ri]) {
         const p = obj;
-        const sz = spriteH * 0.08 * Math.max(0.1, p.life);
-        ctx.fillStyle = p.color || '#a00';
-        const py = spriteTop + spriteH * 0.4 + spriteH * 0.6 * (1 - p.life);
-        ctx.fillRect(screenX - sz/2, py, sz, sz);
+        if (p.isEmber) {
+          // 불똥: 바닥 고정, 깜빡이며 서서히 꺼짐
+          const flicker = 0.5 + 0.5 * Math.sin(Date.now() / 80 + p.x * 31.7);
+          const lifeRatio = Math.min(1, p.life / p.maxLife);
+          const sz = Math.max(1, Math.floor(spriteH * 0.045 * lifeRatio * (0.6 + flicker * 0.4)));
+          const ey = spriteTop + spriteH * 0.93;
+          ctx.globalAlpha = lifeRatio * (0.5 + flicker * 0.5);
+          ctx.fillStyle = p.color;
+          ctx.fillRect(screenX - sz * 0.5, ey - sz * 0.5, sz, sz);
+          ctx.globalAlpha = 1;
+        } else if (p.isAsh) {
+          // 잿더미: 몸체 높이에서 솟구쳐 바닥으로 떨어지는 호 궤적
+          const lifeRatio = p.life / p.maxLife;
+          const sz = Math.max(1, Math.floor(spriteH * 0.05 * lifeRatio));
+          // 수명 초반: 몸체 중간 ~ 상단, 후반: 바닥으로 내려옴
+          const py = spriteTop + spriteH * (0.5 - (lifeRatio - 0.5) * 0.8);
+          ctx.globalAlpha = lifeRatio;
+          ctx.fillStyle = p.color;
+          ctx.fillRect(screenX - sz * 0.5, py, sz, sz);
+          ctx.globalAlpha = 1;
+        } else {
+          // 일반 파티클 (피, 폭발 등)
+          const sz = spriteH * 0.08 * Math.max(0.1, p.life);
+          ctx.fillStyle = p.color || '#a00';
+          const py = spriteTop + spriteH * 0.4 + spriteH * 0.6 * (1 - p.life);
+          ctx.fillRect(screenX - sz*0.5, py, sz, sz);
+        }
       }
-      return; 
+      return;
     }
 
     //---/// 적 총알 렌더링 — 반사탄은 흰/청색, 일반탄은 보라 플라즈마 ///---
@@ -3186,38 +3311,55 @@ function renderSprites(zBuffer, bobY) {
       const ri = Math.min(NUM_RAYS-1, Math.max(0, Math.round(screenX * NUM_RAYS / SCREEN_W)));
       if (corrected < zBuffer[ri]) {
         const a = obj;
-        // 2.0초(시작) ~ 0.2초(폭발) 사이에 0.0 -> 1.0으로 차오름
         const chargeTime = a.maxLife - 0.2;
         const elapsed = a.maxLife - Math.max(0.2, a.life);
         const progress = Math.min(1, Math.max(0, elapsed / chargeTime));
-        
+
         const y = spriteTop + spriteH; // 바닥 위치
-        const aoeScreenR = Math.floor((SCREEN_H / corrected) * a.r * 0.5); 
-        
+        const aoeScreenR = Math.floor((SCREEN_H / corrected) * a.r * 0.5);
+
         ctx.save();
-        ctx.beginPath();
+        ctx.translate(screenX, y);
+        ctx.globalCompositeOperation = 'screen';
+
         if (!a.triggered) {
-          // 1. 고정된 바닥 외곽선
-          if (ctx.ellipse) ctx.ellipse(screenX, y, aoeScreenR, aoeScreenR * 0.35, 0, 0, Math.PI * 2);
-          else ctx.arc(screenX, y, aoeScreenR, 0, Math.PI * 2);
-          ctx.strokeStyle = `rgba(255, 0, 0, 0.5)`;
+          // 외곽 원
+          ctx.beginPath();
+          if (ctx.ellipse) ctx.ellipse(0, 0, aoeScreenR, aoeScreenR * 0.35, 0, 0, Math.PI * 2);
+          else ctx.arc(0, 0, aoeScreenR, 0, Math.PI * 2);
+          ctx.strokeStyle = `rgba(255, 0, 30, ${0.4 + progress * 0.5})`;
+          ctx.lineWidth = 2 + progress * 2;
+          ctx.stroke();
+
+          // 역오망성 (progress에 따라 서서히 회전하며 등장)
+          ctx.globalAlpha = progress;
+          ctx.beginPath();
+          for (let i = 0; i <= 5; i++) {
+            const ang = (i * Math.PI * 0.8) + (progress * Math.PI) - Math.PI / 2;
+            const nx = Math.cos(ang) * aoeScreenR;
+            const ny = Math.sin(ang) * aoeScreenR * 0.35;
+            if (i === 0) ctx.moveTo(nx, ny); else ctx.lineTo(nx, ny);
+          }
+          ctx.strokeStyle = `rgba(255, 50, 0, 0.9)`;
           ctx.lineWidth = 2;
           ctx.stroke();
 
-          // 2. 시간에 따라 차오르는 내부 원
-          const innerR = aoeScreenR * progress;
-          if (innerR > 0) {
+          // 내부 채움 (차오름)
+          if (progress > 0) {
             ctx.beginPath();
-            if (ctx.ellipse) ctx.ellipse(screenX, y, innerR, innerR * 0.35, 0, 0, Math.PI * 2);
-            else ctx.arc(screenX, y, innerR, 0, Math.PI * 2);
-            ctx.fillStyle = `rgba(255, 0, 0, ${0.1 + progress * 0.3})`;
+            if (ctx.ellipse) ctx.ellipse(0, 0, aoeScreenR * progress, aoeScreenR * 0.35 * progress, 0, 0, Math.PI * 2);
+            else ctx.arc(0, 0, aoeScreenR * progress, 0, Math.PI * 2);
+            ctx.fillStyle = `rgba(180, 0, 0, ${progress * 0.25})`;
+            ctx.globalAlpha = 1;
             ctx.fill();
           }
         } else {
-          // 폭발 직후의 잔상
-          if (ctx.ellipse) ctx.ellipse(screenX, y, aoeScreenR, aoeScreenR * 0.35, 0, 0, Math.PI * 2);
-          else ctx.arc(screenX, y, aoeScreenR, 0, Math.PI * 2);
-          ctx.fillStyle = `rgba(255, 50, 0, ${a.life / 0.2})`;
+          // 폭발 잔상
+          ctx.globalAlpha = a.life / 0.2;
+          ctx.beginPath();
+          if (ctx.ellipse) ctx.ellipse(0, 0, aoeScreenR, aoeScreenR * 0.35, 0, 0, Math.PI * 2);
+          else ctx.arc(0, 0, aoeScreenR, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(255, 50, 0, 0.8)`;
           ctx.fill();
         }
         ctx.restore();
@@ -3276,7 +3418,7 @@ function renderSprites(zBuffer, bobY) {
     } else if (type === 'portal') {
       clipHalfW = Math.floor(halfW * 2.0);
     } else if (type === 'soul') {
-      clipHalfW = Math.floor(halfW * 3.5); // 영혼 파편이 멀리 흩어져도 안 잘림
+      clipHalfW = Math.floor(halfW * 3.5);
     }
 
     ctx.save(); ctx.beginPath();
@@ -3310,69 +3452,29 @@ function renderSprites(zBuffer, bobY) {
     ctx.clip(); ctx.globalAlpha = 1.0;
     
     if (type === 'soul') {
-      // [NEW] 형태를 오래 유지하다가 터지는 픽셀 영혼 이펙트
       const s = obj;
-      const p = 1 - (s.life / s.maxLife); // 0.0 ~ 1.0 (진행도)
-      
-      // 진행도의 후반부에만 투명해지도록 조정
-      const alpha = Math.max(0, 1 - Math.pow(p, 2.0));
-      const floatY = spriteH * s.h * 0.15; 
-      const drawY = spriteTop + spriteH * 0.85 - floatY;
-      
+      const p = 1 - (s.life / s.maxLife);
+
+      const drawY = spriteTop + spriteH;
+      const pillarW = halfW * 2.5;
+      const pillarH = SCREEN_H;
+      const alpha = p < 0.2 ? p / 0.2 : (p > 0.8 ? (1 - p) / 0.2 : 1);
+
       ctx.save();
       ctx.translate(screenX, drawY);
       ctx.globalAlpha = alpha;
-      ctx.globalCompositeOperation = 'lighter';
-      
-      // ★ 핵심: 전체 수명 중 앞의 50%는 분해되지 않음(0). 50%를 넘기면 급격히 분해(0.0~1.0)
-      const explodeP = Math.max(0, (p - 0.5) * 2.0); 
-      
-      // 폭발 직전(p가 0.3~0.5 구간)에 부들부들 떠는 연출 (터질 듯한 긴장감)
-      const shake = (p > 0.3 && explodeP === 0) ? (Math.random() - 0.5) * spriteH * 0.04 : 0;
-      ctx.translate(shake, shake);
+      ctx.globalCompositeOperation = 'source-over';
 
-      const cols = 5;
-      const rows = 6;
-      const bw = halfW * 0.9;   
-      const bh = spriteH * 0.5; 
-      const blockW = bw / cols;
-      const blockH = bh / rows;
-      
-      for(let r = 0; r < rows; r++) {
-        for(let c = 0; c < cols; c++) {
-          if (r === 0 && (c === 0 || c === 4)) continue;
-          if (r === 5 && (c === 0 || c === 2 || c === 4)) continue;
-
-          let isHole = false;
-          if ((r === 1 || r === 2) && (c === 1 || c === 3)) isHole = true;
-          if (r === 4 && (c > 0 && c < 4)) isHole = true;
-
-          ctx.fillStyle = isHole ? 'rgba(15, 0, 30, 0.8)' : s.color;
-
-          let bx = -bw / 2 + c * blockW;
-          let by = -bh + r * blockH;
-
-          // 폭발 타이머(explodeP)가 작동할 때만 파편이 밀려남
-          const dirX = c - 2; 
-          const dirY = r - 2.5; 
-          const distFromCenter = Math.hypot(dirX, dirY) || 1;
-          
-          const scatterAmt = Math.pow(explodeP, 2.0) * halfW * 2.5;
-          const ang = Math.sin(r * 12.34 + c * 56.78) * Math.PI * 2;
-          
-          bx += (dirX / distFromCenter) * scatterAmt + Math.cos(ang) * scatterAmt * 0.5;
-          by += (dirY / distFromCenter) * scatterAmt + Math.sin(ang) * scatterAmt * 0.5;
-          
-          // 폭발 중에만 발생하는 글리치 노이즈
-          bx += (Math.random() - 0.5) * explodeP * halfW * 0.3;
-          by += (Math.random() - 0.5) * explodeP * spriteH * 0.3;
-          
-          // 폭발 중에만 픽셀 크기가 줄어듦
-          const scale = Math.max(0.05, 1 - explodeP * 0.95);
-          
-          ctx.fillRect(bx, by, blockW * scale, blockH * scale);
-        }
+      // 원혼 파편 — 기둥 폭 안에서 위로 승천
+      for (let i = 0; i < 12; i++) {
+        const upwardY = (p * pillarH * 2.5 + i * 40) % pillarH;
+        const px = (Math.random() - 0.5) * pillarW * 0.6;
+        const py = -upwardY;
+        const size = Math.max(3, halfW * 0.15 * Math.random());
+        ctx.fillStyle = Math.random() < 0.3 ? '#000000' : 'rgba(50, 0, 0, 0.9)';
+        ctx.fillRect(px, py, size, size * (4 + Math.random() * 6));
       }
+
       ctx.restore();
     } else if (type === 'portal') {
       // (기존 포탈 코드 그대로 유지...)
@@ -3397,10 +3499,25 @@ function renderSprites(zBuffer, bobY) {
       const en = obj;
       // [NEW] 팽창 중이면 시체 렌더링 생략 (부풀어 오르고 서서 죽음)
       const dead = en.hp <= 0 && (!en.compressionTimer || en.compressionTimer <= 0) && (!en.expansionBombTimer || en.expansionBombTimer <= 0);
-      
-      if (dead) { 
+
+      if (dead) {
+        const soulP = soulEnemyMap.get(en);
+
         if (!en._completelyVanished) {
-          ctx.fillStyle='#3a1010'; 
+          if (soulP !== undefined) {
+            // soul 진행 중: 원본 형상을 어둡게 tint해서 그림
+            // hitAlpha를 살짝 높여 색을 탁하게, globalAlpha로 점점 어두워짐
+            const fadeAlpha = soulP < 0.7
+              ? 0.85 - soulP * 0.5          // 0→0.7: 0.85→0.50
+              : Math.max(0, 0.5 - (soulP - 0.7) / 0.3 * 0.5); // 0.7→1.0: 0.50→0
+            ctx.save();
+            ctx.globalAlpha = fadeAlpha;
+            drawEnemyBody(en, screenX, spriteTop, spriteH, halfW, 0);
+            ctx.restore();
+          }
+
+          // 바닥 그림자
+          ctx.fillStyle = soulP !== undefined ? '#1a0000' : '#3a1010';
           ctx.beginPath();
           if (ctx.ellipse) ctx.ellipse(screenX, spriteTop+spriteH*0.9, halfW*1.2, spriteH*0.1, 0, 0, Math.PI*2);
           else ctx.arc(screenX, spriteTop+spriteH*0.9, halfW*1.2, 0, Math.PI*2);
@@ -3613,8 +3730,8 @@ function renderSprites(zBuffer, bobY) {
         // 팽창 애니메이션 (크게 부풀어오르며 진동함)
         if (en.expansionBombTimer > 0) {
           const t = 1 - (en.expansionBombTimer / 0.45);
-          const swell = 1 + t * t * 1.6; // 최대 2.6배까지 팽창
-          scaleX *= swell + Math.sin(t * Math.PI * 10) * 0.15; // 부들부들 떨림
+          const swell = 1 + t * t * 1.6;
+          scaleX *= swell + Math.sin(t * Math.PI * 10) * 0.15;
           scaleY *= swell - Math.sin(t * Math.PI * 10) * 0.15;
         }
 
@@ -3631,76 +3748,8 @@ function renderSprites(zBuffer, bobY) {
         const anchorY = spriteTop + spriteH; 
         ctx.save();
         ctx.transform(scaleX, 0, 0, scaleY, screenX * (1 - scaleX), anchorY * (1 - scaleY));
+        drawEnemyBody(en, screenX, spriteTop, spriteH, halfW, hitAlpha);
         
-        if (en.isShooter) {
-          // (마녀 렌더링 코드 유지)
-          const floatY = Math.sin(Date.now() / 200 + en.x) * spriteH * 0.08; 
-          const bodyC = hitAlpha > 0 ? `rgba(255,180,255,1)` : '#2a1a4a'; 
-          const skinC = hitAlpha > 0 ? `rgba(255,255,255,1)` : '#e0d0f0'; 
-          const hatC  = '#111';
-          
-          ctx.fillStyle = hatC;
-          ctx.beginPath();
-          ctx.moveTo(screenX, spriteTop + floatY - spriteH*0.1);
-          ctx.lineTo(screenX - halfW*0.4, spriteTop + floatY + spriteH*0.15);
-          ctx.lineTo(screenX + halfW*0.4, spriteTop + floatY + spriteH*0.15);
-          ctx.fill();
-          ctx.fillRect(screenX - halfW*0.7, spriteTop + floatY + spriteH*0.12, halfW*1.4, spriteH*0.06); 
-
-          ctx.fillStyle = skinC;
-          ctx.fillRect(screenX - halfW*0.25, spriteTop + floatY + spriteH*0.18, halfW*0.5, spriteH*0.25);
-          
-          ctx.fillStyle = hitAlpha > 0.5 ? '#fff' : '#c080ff';
-          ctx.fillRect(screenX - halfW*0.15, spriteTop + floatY + spriteH*0.25, halfW*0.1, spriteH*0.06);
-          ctx.fillRect(screenX + halfW*0.05, spriteTop + floatY + spriteH*0.25, halfW*0.1, spriteH*0.06);
-
-          ctx.fillStyle = bodyC;
-          ctx.beginPath();
-          ctx.moveTo(screenX - halfW*0.25, spriteTop + floatY + spriteH*0.4);
-          ctx.lineTo(screenX + halfW*0.25, spriteTop + floatY + spriteH*0.4);
-          ctx.lineTo(screenX + halfW*0.6, spriteTop + floatY + spriteH*0.9);
-          ctx.lineTo(screenX - halfW*0.6, spriteTop + floatY + spriteH*0.9);
-          ctx.fill();
-
-          const orbPulse = 0.5 + 0.5 * Math.sin(Date.now() / 150);
-          ctx.fillStyle = `rgba(180, 80, 255, ${0.7 + 0.3 * orbPulse})`;
-          ctx.beginPath();
-          const isCharging = en.chargeTime && en.chargeTime > 0;
-          const orbY = spriteTop + floatY + spriteH*0.45 - (isCharging ? spriteH*0.15 : 0);
-          const orbR = halfW*0.2 + (isCharging ? halfW*0.15 : 0);
-          ctx.arc(screenX + halfW*0.5, orbY, orbR, 0, Math.PI*2);
-          ctx.fill();
-          ctx.fillStyle = '#fff';
-          ctx.beginPath(); ctx.arc(screenX + halfW*0.5, orbY, orbR*0.4, 0, Math.PI*2); ctx.fill();
-
-        } else {
-          // (좀비 렌더링 코드 유지)
-          const bodyC = hitAlpha > 0 ? `rgba(255,180,180,1)` : '#4a5a3a'; 
-          const skinC = hitAlpha > 0 ? `rgba(255,255,255,1)` : '#6a8a4a'; 
-          const eyeC  = hitAlpha > 0.5 ? '#fff' : '#ff0000'; 
-          
-          const walkAnim = en.frame === 0 ? spriteH*0.05 : -spriteH*0.05;
-
-          ctx.fillStyle = skinC; 
-          ctx.fillRect(screenX - halfW*0.35, spriteTop + spriteH*0.1 + walkAnim*0.5, halfW*0.7, spriteH*0.3);
-          
-          ctx.fillStyle = eyeC; 
-          const eyeOff = en.frame === 0 ? -halfW*0.06 : halfW*0.06;
-          ctx.fillRect(screenX - halfW*0.15 + eyeOff, spriteTop + spriteH*0.18 + walkAnim*0.5, halfW*0.1, spriteH*0.08);
-          ctx.fillRect(screenX + halfW*0.05 + eyeOff, spriteTop + spriteH*0.18 + walkAnim*0.5, halfW*0.1, spriteH*0.08);
-
-          ctx.fillStyle = bodyC;
-          ctx.fillRect(screenX - halfW*0.45, spriteTop + spriteH*0.4, halfW*0.9, spriteH*0.45);
-          
-          ctx.fillStyle = skinC;
-          ctx.fillRect(screenX - halfW*0.7, spriteTop + spriteH*0.45 + walkAnim, halfW*0.25, spriteH*0.15); 
-          ctx.fillRect(screenX + halfW*0.45, spriteTop + spriteH*0.5 - walkAnim, halfW*0.25, spriteH*0.12); 
-
-          ctx.fillStyle = '#222';
-          ctx.fillRect(screenX - halfW*0.3, spriteTop + spriteH*0.85 + walkAnim, halfW*0.25, spriteH*0.15);
-          ctx.fillRect(screenX + halfW*0.05, spriteTop + spriteH*0.85 - walkAnim, halfW*0.25, spriteH*0.15);
-        }
-
         if (en.stunTimer > 0)  { ctx.fillStyle=`rgba(255,230,0,0.35)`; ctx.fillRect(screenX-halfW*0.75, spriteTop+spriteH*0.08, halfW*1.5, spriteH*0.88); }
         if (en.frozenTimer > 0){ ctx.fillStyle=`rgba(100,200,255,0.40)`; ctx.fillRect(screenX-halfW*0.75, spriteTop+spriteH*0.08, halfW*1.5, spriteH*0.88); }
         if (en.burnTimer > 0)  {
@@ -3713,7 +3762,6 @@ function renderSprites(zBuffer, bobY) {
           ctx.fillStyle = `rgba(180,0,255,${gAlpha})`;
           ctx.fillRect(screenX-halfW*0.75, spriteTop+spriteH*0.08, halfW*1.5, spriteH*0.88);
         }
-        
         if (en.expansionBombTimer > 0) {
           const gAlpha = Math.min(1, 1 - en.expansionBombTimer / 0.45);
           ctx.fillStyle = `rgba(180, 0, 255, ${gAlpha * 0.8})`;
@@ -4847,13 +4895,10 @@ function applySensitivity(val) {
   const vp = document.getElementById('sens-val-pause');
   if (vp) vp.textContent = val;
 }
-document.addEventListener('DOMContentLoaded', () => {
-  const sm = document.getElementById('sens-slider-main');
-  if (sm) sm.addEventListener('input', function() { applySensitivity(parseInt(this.value)); });
-});
-//---/// 일시정지 슬라이더: 동적 DOM이므로 이벤트 위임 ///---
+//---/// 민감도·BGM 슬라이더: 이벤트 위임으로 통일 (sens-slider-main 포함) ///---
 document.addEventListener('input', e => {
-  if (e.target && e.target.id === 'sens-slider-pause') applySensitivity(parseInt(e.target.value));
+  if (e.target && (e.target.id === 'sens-slider-main' || e.target.id === 'sens-slider-pause'))
+    applySensitivity(parseInt(e.target.value));
   //---/// BGM 볼륨 슬라이더 위임 ///---
   if (e.target && e.target.id === 'bgm-vol-slider') {
     const val = parseInt(e.target.value) / 100;
