@@ -290,13 +290,16 @@ const BGM = (() => {
     osc.start(startTime); osc.stop(startTime + 0.15);
   }
 
+  let _snareBuffer = null; // [최적화] 스네어 버퍼 캐싱 — 최초 1회만 생성 후 재사용
   function scheduleSnare(startTime) {
-    const buf = getAudioCtx().createBuffer(1, Math.floor(getAudioCtx().sampleRate * 0.1), getAudioCtx().sampleRate);
-    const d = buf.getChannelData(0);
-    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    if (!_snareBuffer) {
+      _snareBuffer = getAudioCtx().createBuffer(1, Math.floor(getAudioCtx().sampleRate * 0.1), getAudioCtx().sampleRate);
+      const d = _snareBuffer.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    }
     const src = getAudioCtx().createBufferSource(); const g = getAudioCtx().createGain();
     const f = getAudioCtx().createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 2200;
-    src.buffer = buf;
+    src.buffer = _snareBuffer;
     g.gain.setValueAtTime(0.2, startTime);
     g.gain.exponentialRampToValueAtTime(0.001, startTime + 0.09);
     src.connect(f); f.connect(g); g.connect(masterGain);
@@ -1160,6 +1163,9 @@ let portal = null;
 let portal2 = null;
 let damageIndicators = [];
 let soulFX = [];
+// [최적화] 보스·상인 참조 캐시 — 매 프레임 enemies.find() 방지
+let _cachedBoss = null;
+let _cachedMerchant = null;
 
 
 const canvas = document.getElementById('game'); const ctx = canvas.getContext('2d');
@@ -1202,14 +1208,14 @@ document.addEventListener('keydown', e => {
   if (e.code === 'Space' && state.running && !state.paused && !state.dead && !state.upgrading && document.pointerLockElement === canvas) tryDash();
   if (e.code === 'KeyV' && state.running && !state.paused && !state.dead && !state.upgrading && document.pointerLockElement === canvas) {
     currentWeapon = (currentWeapon === 'gun') ? 'mace' : 'gun';
-    updateHUD(); 
+    markHUDDirty(); 
   }
   
   if (e.code === 'KeyE' && state.running && !state.paused && !state.dead && !state.upgrading && document.pointerLockElement === canvas) {
     if (state.fadeOut === 0) {
       const p1near = portal  && portal.active  && Math.hypot(portal.x  - player.x, portal.y  - player.y) < 1.5;
       const p2near = portal2 && portal2.active && Math.hypot(portal2.x - player.x, portal2.y - player.y) < 1.5;
-	  const merchant = enemies.find(en => en.isMerchant && en.active);
+	  const merchant = _cachedMerchant && _cachedMerchant.active ? _cachedMerchant : null;
       if (merchant && Math.hypot(merchant.x - player.x, merchant.y - player.y) < 2.0) {
         const cost = 2500; // 업그레이드 구매 비용
         if (state.score >= cost) {
@@ -1217,7 +1223,7 @@ document.addEventListener('keydown', e => {
           // 거래 완료 대사 출력 후 즉시 업그레이드 창 팝업!
           merchant.dialogueText = "A WISE BARGAIN...";
           merchant.dialogueTimer = 3.0;
-          updateHUD();
+          markHUDDirty();
           showUpgradeUI(() => { canvas.requestPointerLock(); });
         } else {
           merchant.dialogueText = "NOT ENOUGH SOULS (2500 SCORE).";
@@ -1252,7 +1258,7 @@ document.addEventListener('keydown', e => {
           applyLevelUpBonus();
           state.pendingUpgrades++;
         }
-        updateHUD(); // 화면에 즉시 반영
+        markHUDDirty(); // 화면에 즉시 반영
         
         state.fadeOut = 0.8; // 다음 스테이지로 페이드 아웃 시작
       }
@@ -1482,7 +1488,9 @@ function spawnEntities(rooms) {
     const cx = rooms[0].cx + 0.5, cy = rooms[0].cy + 0.5;
     
     // 중앙에 상인 스폰
-    enemies.push(new Merchant(cx, cy));
+    const _m = new Merchant(cx, cy);
+    enemies.push(_m);
+    _cachedMerchant = _m; _cachedBoss = null;
     
     // 중앙을 중심으로 반경 2.0 거리에 아이템 9개 원형 스폰
     const itemTypes = ['health', 'health', 'health', 'armor', 'armor', 'armor', 'ammo', 'ammo', 'ammo'];
@@ -1529,7 +1537,9 @@ function spawnEntities(rooms) {
     if (state.isBossStage) {
       if (i === 0) {
         const arenaRoom = rooms.length > 1 ? rooms[1] : rooms[0];
-        enemies.push(new BossEnemy(arenaRoom.cx + 0.5, arenaRoom.cy + 0.5));
+        const _b = new BossEnemy(arenaRoom.cx + 0.5, arenaRoom.cy + 0.5);
+        enemies.push(_b);
+        _cachedBoss = _b; _cachedMerchant = null;
       }
       continue;
     }
@@ -1594,6 +1604,8 @@ function spawnEntities(rooms) {
   } else {
     if (bestPortal) portal = { x: bestPortal.x, y: bestPortal.y, time: 0, active: true };
   }
+  // [최적화] 일반 스테이지: 보스/상인 없음
+  if (!state.isBossStage) { _cachedBoss = null; _cachedMerchant = null; }
 }
 
 function initGame() {
@@ -1747,6 +1759,9 @@ function updateHUD() {
   HUD.expVal.textContent = 'LV ' + state.level;
 
 }
+// [최적화] HUD 더티 플래그 — 매 이벤트마다 DOM 접근 대신 게임 루프 끝에서 일괄 처리
+let _hudDirty = false;
+function markHUDDirty() { _hudDirty = true; }
 
 function spawnNeededItem(x, y) {
   const hpPct = state.health / 100;
@@ -1818,7 +1833,7 @@ function triggerDarkExplosion(cx, cy, _depth) {
     state.armor -= absorbed; state.health -= (pDmg - absorbed);
     damageFlashAlpha = 0.8; sndPlayerHit();
     if (state.health <= 0) { state.health = 0; state.dead = true; }
-    updateHUD();
+    markHUDDirty();
   }
 }
 function applyMagicEffects(en) {
@@ -1963,7 +1978,7 @@ function triggerBossRegen(en) {
   en._waitingMinions = false;
   en._retreatTimer = 0;
   
-  updateHUD();
+  markHUDDirty();
 }
 
 
@@ -1977,6 +1992,9 @@ function collectRemainingItems() {
 
 function handleEnemyKill(en) {
   en.hp = 0; en.state = 'dead'; en.active = false;
+  // [최적화] 캐시된 보스·상인 참조 해제
+  if (en === _cachedBoss) _cachedBoss = null;
+  if (en === _cachedMerchant) _cachedMerchant = null;
 
   //---/// 변종 킬 보너스 배율 결정 ///---
   let killScoreMult = gun.KILL_BONUS_MULT;
@@ -2084,7 +2102,7 @@ function handleEnemyKill(en) {
         items.push(new Item(ix + 0.5, iy + 0.5, type)); break;
       }
     });
-    updateHUD(); return;
+    markHUDDirty(); return;
   }
 
   const remaining = enemies.filter(e => e.active && e.hp > 0);
@@ -2338,7 +2356,7 @@ function tryShoot() {
         }
       }
     });
-    updateHUD(); return;
+    markHUDDirty(); return;
   }
   let tColor = '#ffea00', tGlow = '#ffaa00', tSize = 3.5, tLife = 0.12, tSpeed = 0.35, tBlur = 8;
   
@@ -2416,7 +2434,7 @@ function tryShoot() {
     hits++;
   }
   if (gun.chamber === 0 && gun.mag > 0) { gun.chamber = 1; gun.mag--; }
-  updateHUD();
+  markHUDDirty();
 }
 // --- [NEW] 바메이스 공격 로직 (타격 타이밍 미세 조정) ---
 function tryMaceSwing() {
@@ -2484,7 +2502,7 @@ function tryReload() {
     if (full1 && full2) return;
     gun.reloading = true;
     gun.reloadTimer = gun.RELOAD_TIME * 1.3;
-    sndReload(); updateHUD(); return;
+    sndReload(); markHUDDirty(); return;
   }
   
   // [FIX] 과거 잔재인 하드코딩(totalRounds >= 5) 완전 삭제!
@@ -2494,7 +2512,7 @@ function tryReload() {
   gun.reloading = true;
   if (gun.chamber === 1) { gun.reloadTimer = gun.RELOAD_TIME_FAST; sndReloadFast(); }
   else { gun.reloadTimer = gun.RELOAD_TIME; sndReload(); }
-  updateHUD();
+  markHUDDirty();
 }
 
 function tryMelee() {
@@ -2520,7 +2538,7 @@ function tryMelee() {
     const kx = Math.cos(player.angle) * KNOCKBACK; const ky = Math.sin(player.angle) * KNOCKBACK;
     if (!isWall(closest.x + kx, closest.y)) closest.x += kx;
     if (!isWall(closest.x, closest.y + ky)) closest.y += ky;
-    updateHUD();
+    markHUDDirty();
   }
   //---/// 근접 범위 내 적 총알을 플레이어 시선 방향으로 튕겨냄 ///---
   const REFLECT_RANGE = 1.6; const REFLECT_SPEED = 7.0;
@@ -2656,7 +2674,7 @@ function movePlayer(dt) {
         gun.mags--; gun.mag = gun.MAG_SIZE;
         if (gun.chamber === 0 && gun.mag > 0) { gun.chamber = 1; gun.mag--; }
       }
-      gun.reloading = false; updateHUD();
+      gun.reloading = false; markHUDDirty();
     }
   }
 }
@@ -3085,7 +3103,7 @@ function updateEnemies(dt) {
           damageFlashAlpha = 0.7;
           damageIndicators.push({ angle: Math.atan2(en.y - player.y, en.x - player.x), alpha: 1.0 });
           sndPlayerHit();
-          if (state.health <= 0) { state.health = 0; state.dead = true; } updateHUD();
+          if (state.health <= 0) { state.health = 0; state.dead = true; } markHUDDirty();
         }
       } else { en.inContact = false; }
 
@@ -3196,7 +3214,7 @@ function updateEnemies(dt) {
           const kAng = Math.atan2(player.y - en.y, player.x - en.x);
           player.kbVX = Math.cos(kAng) * 12; player.kbVY = Math.sin(kAng) * 12; player.kbActive = 0.25;
           damageFlashAlpha = 0.7; sndPlayerHit();
-          if (state.health <= 0) { state.health = 0; state.dead = true; } updateHUD();
+          if (state.health <= 0) { state.health = 0; state.dead = true; } markHUDDirty();
           en._charging = false; en._chargeCooldown = 3.0;
         }
         return;
@@ -3240,7 +3258,7 @@ function updateEnemies(dt) {
           const kAng2 = Math.atan2(dy, dx);
           player.kbVX = Math.cos(kAng2) * 8; player.kbVY = Math.sin(kAng2) * 8; player.kbActive = 0.2;
           damageFlashAlpha = 0.6; sndPlayerHit();
-          if (state.health <= 0) { state.health = 0; state.dead = true; } updateHUD();
+          if (state.health <= 0) { state.health = 0; state.dead = true; } markHUDDirty();
         }
       } else { en.inContact = false; }
       return;
@@ -3305,7 +3323,7 @@ function updateEnemies(dt) {
           const abs4 = Math.min(state.armor, Math.floor(dmg4 / 2));
           state.armor -= abs4; state.health -= (dmg4 - abs4);
           damageFlashAlpha = 0.6; sndPlayerHit();
-          if (state.health <= 0) { state.health = 0; state.dead = true; } updateHUD();
+          if (state.health <= 0) { state.health = 0; state.dead = true; } markHUDDirty();
         }
       } else { en.inContact = false; }
       return;
@@ -3376,7 +3394,7 @@ function updateEnemies(dt) {
           const abs5 = Math.min(state.armor, Math.floor(dmg5 / 2));
           state.armor -= abs5; state.health -= (dmg5 - abs5);
           damageFlashAlpha = 0.4; sndPlayerHit();
-          if (state.health <= 0) { state.health = 0; state.dead = true; } updateHUD();
+          if (state.health <= 0) { state.health = 0; state.dead = true; } markHUDDirty();
         }
       } else { en.inContact = false; }
       return;
@@ -3412,7 +3430,7 @@ function updateEnemies(dt) {
           const abs6 = Math.min(state.armor, Math.floor(dmg6 / 2));
           state.armor -= abs6; state.health -= (dmg6 - abs6);
           damageFlashAlpha = 0.7; sndPlayerHit();
-          if (state.health <= 0) { state.health = 0; state.dead = true; } updateHUD();
+          if (state.health <= 0) { state.health = 0; state.dead = true; } markHUDDirty();
         }
       } else { en.inContact = false; }
       return;
@@ -3482,7 +3500,7 @@ function updateEnemies(dt) {
         damageIndicators.push({ angle: enemyAngle, alpha: 1.0 });
 
         sndPlayerHit();
-        if (state.health <= 0) { state.health = 0; state.dead = true; } updateHUD();
+        if (state.health <= 0) { state.health = 0; state.dead = true; } markHUDDirty();
       }
     } else {
       en.inContact = false; // 접촉 해제 — 다음 접촉 시 다시 즉시 공격
@@ -3525,7 +3543,7 @@ function updateEnemyBullets(dt) {
           applyDamage(en, rdmg, false, true); // isPlayerAttack=true: 킬 보너스·마법 효과 적용
           applyMagicEffects(en);
           spawnBlood(en.x, en.y, 4);
-          updateHUD(); hit = true;
+          markHUDDirty(); hit = true;
         }
       });
       if (hit) continue;
@@ -3540,7 +3558,7 @@ function updateEnemyBullets(dt) {
       damageIndicators.push({ angle: Math.atan2(b.y - player.y, b.x - player.x), alpha: 1.0 });
       sndPlayerHit();
       if (state.health <= 0) { state.health = 0; state.dead = true; }
-      updateHUD();
+      markHUDDirty();
       continue;
     }
     
@@ -3551,7 +3569,7 @@ function updateEnemyBullets(dt) {
         const dmg = Math.round(enemyScale.dmg * 0.7);
         applyDamage(en, dmg);
         spawnBlood(en.x, en.y, 3);
-        updateHUD(); ffHit = true;
+        markHUDDirty(); ffHit = true;
       }
     });
     if (ffHit) continue;
@@ -3578,7 +3596,7 @@ function updateBossAoes(dt) {
         damageFlashAlpha = 0.8;
         damageIndicators.push({ angle: Math.atan2(a.y - player.y, a.x - player.x), alpha: 1.0 });
         sndPlayerHit();
-        if (state.health <= 0) { state.health = 0; state.dead = true; } updateHUD();
+        if (state.health <= 0) { state.health = 0; state.dead = true; } markHUDDirty();
       }
       skyStrikes.push({ x: a.x, y: a.y, life: 0.4 });
       sndShoot('thunder');
@@ -3621,7 +3639,7 @@ function updateItems(dt) {
           applyLevelUpBonus();
           state.pendingUpgrades++;
         }
-        updateHUD();
+        markHUDDirty();
         return;
       }
       //---/// 고속 직선 이동 (벽 무시) ///---
@@ -3653,7 +3671,7 @@ function updateItems(dt) {
         applyLevelUpBonus();
         state.pendingUpgrades++;
       }
-      updateHUD();
+      markHUDDirty();
     }
     it.bob += 0.05;
   });
@@ -4380,9 +4398,10 @@ function castRays(bobY) {
             // 안개(거리 음영) 적용
             const fr = Math.floor(tr * fog), fg2 = Math.floor(tg * fog), fb = Math.floor(tb * fog);
             
-            // 버퍼에 쓰기
+            // [최적화] 행 시작 인덱스를 미리 계산해 px 루프 내 곱셈 횟수 감소
+            const rowBase = (y * SCREEN_W + screenX0) * 4;
             for (let px = screenX0; px < screenX1; px++) {
-              const i = (y * SCREEN_W + px) * 4; 
+              const i = rowBase + (px - screenX0) * 4; 
               data[i] = fr; data[i+1] = fg2; data[i+2] = fb; data[i+3] = 255;
             }
           }
@@ -4392,6 +4411,8 @@ function castRays(bobY) {
 
 const _spritesPool = [];
 let _spriteCount = 0;
+const _soulEnemyMap = new Map();      // [최적화] 매 프레임 new Map() 생성 방지 — clear()로 재사용
+const _activeSpritesSorted = [];      // [최적화] slice() 대신 재사용 가능한 정렬 버퍼
 
 function addSpriteToPool(type, obj, dist) {
   if (_spriteCount >= _spritesPool.length) {
@@ -4404,9 +4425,9 @@ function addSpriteToPool(type, obj, dist) {
 function renderSprites(zBuffer, bobY) {
   _spriteCount = 0; // 풀 인덱스 초기화
 
-  // 공양 soul이 살아있는 enemy → 진행도(p) 맵
-  const soulEnemyMap = new Map();
-  soulFX.forEach(s => { if (s.en) soulEnemyMap.set(s.en, 1 - s.life / s.maxLife); });
+  // [최적화] new Map() 매 프레임 생성 방지 — 전역 맵을 clear()하여 재사용
+  _soulEnemyMap.clear();
+  soulFX.forEach(s => { if (s.en) _soulEnemyMap.set(s.en, 1 - s.life / s.maxLife); });
 
   enemies.forEach(en => addSpriteToPool('enemy', en, Math.hypot(en.x-player.x, en.y-player.y)));
   enemyBullets.forEach(b => addSpriteToPool('ebullet', b, Math.hypot(b.x-player.x, b.y-player.y)));
@@ -4417,10 +4438,12 @@ function renderSprites(zBuffer, bobY) {
   if (portal && portal.active) addSpriteToPool('portal', portal, Math.hypot(portal.x - player.x, portal.y - player.y));
   if (portal2 && (portal2.active || portal2.spawning)) addSpriteToPool('portal', portal2, Math.hypot(portal2.x - player.x, portal2.y - player.y));
   
-  // 사용된 만큼의 서브 배열만 가져와 정렬 (객체 자체는 재사용됨)
-  const activeSprites = _spritesPool.slice(0, _spriteCount).sort((a,b) => b.dist - a.dist);
-  
-  activeSprites.forEach(({ type, obj, dist }) => {
+  // [최적화] slice() 대신 전역 버퍼에 복사 후 정렬 — 매 프레임 새 배열 생성 방지
+  _activeSpritesSorted.length = _spriteCount;
+  for (let i = 0; i < _spriteCount; i++) _activeSpritesSorted[i] = _spritesPool[i];
+  _activeSpritesSorted.sort((a,b) => b.dist - a.dist);
+
+  _activeSpritesSorted.forEach(({ type, obj, dist }) => {
     // [이 아래부터는 기존 renderSprites 내부 로직과 완전히 동일합니다]
     const dx=obj.x-player.x, dy=obj.y-player.y;
     let sa = Math.atan2(dy,dx) - player.angle;
@@ -4662,7 +4685,7 @@ function renderSprites(zBuffer, bobY) {
       const dead = en.hp <= 0 && (!en.compressionTimer || en.compressionTimer <= 0) && (!en.expansionBombTimer || en.expansionBombTimer <= 0);
 
       if (dead) {
-        const soulP = soulEnemyMap.get(en);
+        const soulP = _soulEnemyMap.get(en);
 
         if (!en._completelyVanished) {
           if (soulP !== undefined) {
@@ -5934,7 +5957,7 @@ function showUpgradeUI(onDone) {
       if (up.gun) gun.DMG_BASE = Math.round(gun.DMG_BASE * 1.01 * 100) / 100;
       document.getElementById('upgrade-overlay').style.display = 'none';
       state.upgrading = false;
-      updateHUD();
+      markHUDDirty();
       if (onDone) {
         //---/// 체인 업그레이드: 다음 UI 먼저 띄우고, 완전히 끝난 뒤에만 캡처 ///---
         onDone();
@@ -6185,8 +6208,8 @@ function renderEnemyRadar(zBuffer) {
 }
 
 function renderTelegraphs() {
-  // 기를 모으고 있고, 그 패턴이 '검기(slash)'인 보스를 찾음
-  const boss = enemies.find(e => e.isBoss && e.active && e.hp > 0 && e.castTimer > 0 && e.castType === 'slash');
+  // [최적화] 캐시된 보스 참조로 배열 순회 방지
+  const boss = (_cachedBoss && _cachedBoss.active && _cachedBoss.hp > 0 && _cachedBoss.castTimer > 0 && _cachedBoss.castType === 'slash') ? _cachedBoss : null;
   if (!boss || !boss.slashAngles) return;
   
   ctx.save();
@@ -6300,7 +6323,7 @@ function gameLoop(timestamp) {
       if (player.armorRegenTimer >= 0.2) {
         player.armorRegenTimer = 0; // 타이머 초기화
         state.armor = Math.min(state.maxArmor, state.armor + UPG('protection'));
-        updateHUD(); // UI 즉각 갱신
+        markHUDDirty(); // UI 즉각 갱신
       }
     }
 
@@ -6330,7 +6353,7 @@ function gameLoop(timestamp) {
   let interactionMsg = null;
   let interactionColor = '#fff';
   
-  const merchant = enemies.find(e => e.isMerchant && e.active);
+  const merchant = _cachedMerchant && _cachedMerchant.active ? _cachedMerchant : null;
   if (merchant && Math.hypot(merchant.x - player.x, merchant.y - player.y) < 2.0) {
      // 플레이어의 현재 점수가 2500점 이상인지 확인하여 안내 문구 변경
      if (state.score >= 2500) {
@@ -6391,7 +6414,7 @@ function gameLoop(timestamp) {
 
   //---/// 보스 스테이지: 포털 잠김 메시지 처리 ///---
   if (state.isBossStage && (!portal || !portal.active) && !state.dead) {
-    const boss = enemies.find(e => e.isBoss && e.active);
+    const boss = _cachedBoss && _cachedBoss.active ? _cachedBoss : null;
     if (boss && boss._regenPhase) {
       ctx.save(); ctx.font = '16px Share Tech Mono'; ctx.textAlign = 'center';
       
@@ -6416,6 +6439,9 @@ function gameLoop(timestamp) {
       ctx.restore();
     }
   }
+
+  // [최적화] HUD 더티 플래그 — 매 프레임 1회만 DOM 업데이트
+  if (_hudDirty) { updateHUD(); _hudDirty = false; }
 
   requestAnimationFrame(gameLoop);
 }
