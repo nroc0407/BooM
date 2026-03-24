@@ -25,20 +25,6 @@
   #screen-wrap { position: relative; }
   canvas { display: block; image-rendering: pixelated; }
 
-  /* 우측 하단 탄약 표시 */
-  #ammo-overlay {
-    position: absolute; bottom: 10px; right: 10px;
-    background: rgba(0,0,0,0.55); border: 1px solid #600; padding: 6px 10px;
-    z-index: 4; pointer-events: none; text-align: right;
-  }
-  #ammo-overlay .a-label { font-size: 12px; color: #660; letter-spacing: 2px; margin-bottom: 4px; }
-  #ammo-bullets { display: flex; gap: 3px; justify-content: flex-end; margin-bottom: 3px; }
-  .bullet-dot { width: 7px; height: 12px; border-radius: 2px 2px 1px 1px; background: #c00; box-shadow: 0 0 4px #f00; }
-  .bullet-dot.empty { background: #333; box-shadow: none; }
-  .bullet-dot.chamber { background: #ff0; box-shadow: 0 0 4px #ff0; }
-  #ammo-mags { font-size: 18px; color: #c44; letter-spacing: 1px; text-align: right; }
-  #reload-msg { font-size: 16px; color: #ff0; letter-spacing: 2px; text-align: center; margin-top: 3px; min-height: 14px; }
-
   /* 업그레이드 선택 UI */
   #upgrade-overlay {
     position: absolute; inset: 0; background: rgba(0,0,0,0.85); display: none;
@@ -176,12 +162,6 @@
     </div>
   </div>
 
-  <div id="ammo-overlay">
-    <div class="a-label">AMMO</div>
-    <div id="ammo-bullets"></div>
-    <div id="ammo-mags"></div>
-    <div id="reload-msg"></div>
-  </div>
 
   <div id="damage-flash"></div>
 
@@ -563,6 +543,17 @@ const SCREEN_W = 1280; const SCREEN_H = 740;
 let MAP_W = 20; let MAP_H = 20;
 const FOV = Math.PI / 3 * 1.2; const HALF_FOV = FOV / 2;
 const NUM_RAYS = 550; const MAX_DEPTH = 20; const WALL_SCALE = 1.0;
+
+// --- [최적화 6단계] 550개 광선의 상대 각도 삼각함수 값을 미리 계산 (Lookup Table) ---
+const RAY_ANGLES = new Float32Array(NUM_RAYS);
+const RAY_COS = new Float32Array(NUM_RAYS);
+const RAY_SIN = new Float32Array(NUM_RAYS);
+for (let i = 0; i < NUM_RAYS; i++) {
+  const relAng = -HALF_FOV + (i / NUM_RAYS) * FOV;
+  RAY_ANGLES[i] = relAng;
+  RAY_COS[i] = Math.cos(relAng);
+  RAY_SIN[i] = Math.sin(relAng);
+}
 let ENEMY_COUNT = 8; const ITEM_COUNT = 5;
 //---/// 마우스 감도 — 기존 0.0025 에서 하향 조정 ///---
 let MOUSE_SENSITIVITY = 0.0005 * 6; // 슬라이더 기본값 6
@@ -866,6 +857,23 @@ const gun = {
   _cleric2ndMag: 6,
   _clericFlash: 0,
 };
+// --- [NEW] 애니메이션용 Easings 함수 (팍! 하고 치고 스윽~ 회수하는 느낌 구현) ---
+// 입력 t (0~1)를 받아서 곡선형 출력 (0~1)을 반환 (Ease-Out: 후반 감속)
+function easeOutQuad(t) { return 1 - (1 - t) * (1 - t); }
+// (Ease-Out-Back: 후반 감속 + 살짝 뒤로 튕김 - 더욱 타격감이 살아남)
+function easeOutBack(t) {
+  const c1 = 1.70158; const c3 = c1 + 1;
+  return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+}
+// --- [NEW] 유러피안 바메이스 데이터 및 무기 교체 변수 ---
+const mace = {
+  damage: 150,          // 샷건 펠릿 다 맞은 것보다 강한 단일 묵직함
+  range: 2.5,           // 근접 사거리 (블록 단위)
+  cleaveAngle: Math.PI/2.5, // 전방 약 72도 부채꼴 범위 타격
+  cooldown: 0.8,        // 공격 속도 (매우 느림)
+  swingTimer: 0         // 애니메이션 및 쿨다운 타이머
+};
+let currentWeapon = 'gun'; // 'gun' 또는 'mace'
 
 // [NEW] 기존 게임 루프(전투, 이펙트 등) 코드를 전혀 수정하지 않기 위한 게터 브릿지
 Object.defineProperties(gun, {
@@ -885,28 +893,69 @@ Object.defineProperties(gun, {
 
 function applyCaliberStats() {
   const c = gun.CALIBER;
+
+  // .45 기본형
   if (c === '45cal' || !c) {
-    gun.MAG_SIZE = gun.BASE_MAG_SIZE; gun.SHOOT_COOLDOWN = gun.BASE_SHOOT_COOLDOWN;
-    gun.RELOAD_TIME = gun.BASE_RELOAD_TIME; gun.RELOAD_TIME_FAST = gun.BASE_RELOAD_TIME_FAST;
-    gun.PIERCE = gun.BASE_PIERCE; gun.EXPLODE_RADIUS = gun.BASE_EXPLODE_RADIUS;
-  } else if (c === '12gauge') {
-    //---/// 12게이지 : 산탄 — 관통 0 고정, 탄창 x0.5, 공속 .45 대비 -20% ///---
-    gun.MAG_SIZE = Math.max(2, Math.floor(gun.BASE_MAG_SIZE * 0.5)); gun.SHOOT_COOLDOWN = gun.BASE_SHOOT_COOLDOWN * 1.2;
-    gun.RELOAD_TIME = gun.BASE_RELOAD_TIME * 1.4; gun.RELOAD_TIME_FAST = gun.BASE_RELOAD_TIME_FAST * 1.4;
-    gun.PIERCE = 0; gun.EXPLODE_RADIUS = gun.BASE_EXPLODE_RADIUS * 0.3;
-  } else if (c === '20mm') {
-    //---/// 20mm : 베이스 데미지 2배, 폭발반경 x1.5, 탄창 x0.7, 공속 .45 대비 -50% ///---
-    gun.MAG_SIZE = Math.max(3, Math.floor(gun.BASE_MAG_SIZE * 0.7)); gun.SHOOT_COOLDOWN = gun.BASE_SHOOT_COOLDOWN * 1.5;
-    gun.RELOAD_TIME = gun.BASE_RELOAD_TIME * 1.2; gun.RELOAD_TIME_FAST = gun.BASE_RELOAD_TIME_FAST * 1.2;
-    gun.PIERCE = Math.max(gun.BASE_PIERCE, 2); gun.EXPLODE_RADIUS = gun.BASE_EXPLODE_RADIUS * 1.5;
-  } else if (c === '9mm') {
-    //---/// 9mm : 탄창 x1.5, 연사 x1.5, 데미지 -3 ///---
-    gun.MAG_SIZE = Math.floor(gun.BASE_MAG_SIZE * 1.5); gun.SHOOT_COOLDOWN = gun.BASE_SHOOT_COOLDOWN * (1/1.5);
-    gun.RELOAD_TIME = gun.BASE_RELOAD_TIME * 0.85; gun.RELOAD_TIME_FAST = gun.BASE_RELOAD_TIME_FAST * 0.85;
-    gun.PIERCE = gun.BASE_PIERCE; gun.EXPLODE_RADIUS = gun.BASE_EXPLODE_RADIUS * 0.6;
+    gun.MAG_SIZE = gun.BASE_MAG_SIZE;
+    gun.SHOOT_COOLDOWN = gun.BASE_SHOOT_COOLDOWN * 1.0;
+
+    gun.RELOAD_TIME = gun.BASE_RELOAD_TIME;
+    gun.RELOAD_TIME_FAST = gun.BASE_RELOAD_TIME_FAST;
+
+    gun.PIERCE = gun.BASE_PIERCE;
+    gun.EXPLODE_RADIUS = gun.BASE_EXPLODE_RADIUS;
   }
+
+  // 12게이지 펌프액션
+  else if (c === '12gauge') {
+
+    gun.MAG_SIZE = Math.max(2, Math.floor(gun.BASE_MAG_SIZE * 0.5));
+
+    // 펑! 철컥
+    gun.SHOOT_COOLDOWN = gun.BASE_SHOOT_COOLDOWN * 1.8;
+
+    gun.RELOAD_TIME = gun.BASE_RELOAD_TIME * 1.5;
+    gun.RELOAD_TIME_FAST = gun.BASE_RELOAD_TIME_FAST * 1.5;
+
+    gun.PIERCE = 0;
+    gun.EXPLODE_RADIUS = gun.BASE_EXPLODE_RADIUS * 0.3;
+  }
+
+  // 20mm 중화기
+  else if (c === '20mm') {
+
+    gun.MAG_SIZE = Math.max(3, Math.floor(gun.BASE_MAG_SIZE * 0.7));
+
+    // 타앙... 타앙...
+    gun.SHOOT_COOLDOWN = gun.BASE_SHOOT_COOLDOWN * 2.4;
+
+    gun.RELOAD_TIME = gun.BASE_RELOAD_TIME * 1.3;
+    gun.RELOAD_TIME_FAST = gun.BASE_RELOAD_TIME_FAST * 1.3;
+
+    gun.PIERCE = Math.max(gun.BASE_PIERCE, 2);
+    gun.EXPLODE_RADIUS = gun.BASE_EXPLODE_RADIUS * 1.5;
+  }
+
+  // 9mm 기관권총 느낌
+  else if (c === '9mm') {
+
+    gun.MAG_SIZE = Math.floor(gun.BASE_MAG_SIZE * 1.6);
+
+    // 탕탕탕탕탕
+    gun.SHOOT_COOLDOWN = gun.BASE_SHOOT_COOLDOWN * 0.55;
+
+    gun.RELOAD_TIME = gun.BASE_RELOAD_TIME * 0.8;
+    gun.RELOAD_TIME_FAST = gun.BASE_RELOAD_TIME_FAST * 0.8;
+
+    gun.PIERCE = gun.BASE_PIERCE;
+    gun.EXPLODE_RADIUS = gun.BASE_EXPLODE_RADIUS * 0.6;
+  }
+
   gun.mag = Math.min(gun.mag, gun.MAG_SIZE);
-  if (gun._cleric2ndMag !== undefined) gun._cleric2ndMag = Math.min(gun._cleric2ndMag, gun.MAG_SIZE);
+
+  if (gun._cleric2ndMag !== undefined) {
+    gun._cleric2ndMag = Math.min(gun._cleric2ndMag, gun.MAG_SIZE);
+  }
 }
 
 const player = { x: 2.5, y: 2.5, angle: 0, bobPhase: 0, bobAmt: 0, shootCooldown: 0, meleeCooldown: 0, meleeSwing: 0, kickAmt: 0 };
@@ -1116,12 +1165,45 @@ let soulFX = [];
 const canvas = document.getElementById('game'); const ctx = canvas.getContext('2d');
 const keys = {};
 
+const HUD = {
+  score: null, stage: null, kills: null, damage: null,
+  pending: null, pendingCount: null,
+  hpFill: null, armFill: null, hpVal: null, armVal: null,
+  expFill: null, expVal: null,
+  bullets: null, mags: null, reloadMsg: null,
+  initialized: false
+};
+
+function initHUD() {
+  if (HUD.initialized) return;
+  HUD.score = document.getElementById('hud-score');
+  HUD.stage = document.getElementById('hud-stage');
+  HUD.kills = document.getElementById('hud-kills');
+  HUD.damage = document.getElementById('hud-damage');
+  HUD.pending = document.getElementById('hud-pending');
+  HUD.pendingCount = document.getElementById('hud-pending-count');
+  HUD.hpFill = document.getElementById('bar-hp-fill');
+  HUD.armFill = document.getElementById('bar-arm-fill');
+  HUD.hpVal = document.getElementById('bar-hp-val');
+  HUD.armVal = document.getElementById('bar-arm-val');
+  HUD.expFill = document.getElementById('bar-exp-fill');
+  HUD.expVal = document.getElementById('bar-exp-val');
+  HUD.bullets = document.getElementById('ammo-bullets');
+  HUD.mags = document.getElementById('ammo-mags');
+  HUD.reloadMsg = document.getElementById('reload-msg');
+  HUD.initialized = true;
+}
+
 // 전역 우클릭 방지 (캔버스뿐만 아니라 문서 전체)
 document.addEventListener('contextmenu', e => e.preventDefault());
 
 document.addEventListener('keydown', e => {
   keys[e.code] = true;
   if (e.code === 'Space' && state.running && !state.paused && !state.dead && !state.upgrading && document.pointerLockElement === canvas) tryDash();
+  if (e.code === 'KeyV' && state.running && !state.paused && !state.dead && !state.upgrading && document.pointerLockElement === canvas) {
+    currentWeapon = (currentWeapon === 'gun') ? 'mace' : 'gun';
+    updateHUD(); 
+  }
   
   if (e.code === 'KeyE' && state.running && !state.paused && !state.dead && !state.upgrading && document.pointerLockElement === canvas) {
     if (state.fadeOut === 0) {
@@ -1296,9 +1378,13 @@ canvas.addEventListener('click', e => {
 
 let mouseLeftDown = false;
 canvas.addEventListener('mousedown', e => {
-  // 업그레이드 중일 때는 마우스 입력을 완전히 무시
   if (!state.running || state.paused || state.upgrading || document.pointerLockElement !== canvas) return;
-  if (e.button === 0) { mouseLeftDown = true; tryShoot(); }
+  if (e.button === 0) { 
+    mouseLeftDown = true; 
+    // --- [NEW] 무기에 따른 공격 분기 ---
+    if (currentWeapon === 'mace') tryMaceSwing();
+    else tryShoot(); 
+  }
   if (e.button === 2) tryMelee();
 });
 canvas.addEventListener('mouseup', e => { if (e.button === 0) mouseLeftDown = false; });
@@ -1351,7 +1437,10 @@ document.addEventListener('pointerlockchange', () => {
 });
 
 function isWall(x, y) {
-  const mx = Math.floor(x); const my = Math.floor(y);
+  // --- [최적화 7단계] 초당 수십만 번 호출되는 Math.floor를 비트 연산(| 0)으로 대체 ---
+  // JS 엔진의 실수 변환 오버헤드를 생략하고 하드웨어 레벨에서 소수점을 날려버립니다.
+  const mx = x | 0; 
+  const my = y | 0;
   if (mx < 0 || my < 0 || mx >= MAP_W || my >= MAP_H) return true;
   return currentMap[my][mx] !== 0;
 }
@@ -1633,72 +1722,30 @@ function updateSoulFX(dt) {
 }
 
 function updateHUD() {
-  const hp = Math.max(0, state.health); const arm = Math.max(0, state.armor);
-  document.getElementById('hud-score').textContent = state.score;
-  document.getElementById('hud-stage').textContent = state.stage;
-  document.getElementById('hud-kills').textContent = state.kills;
-  document.getElementById('hud-damage').textContent = Math.round(state.totalDamage);
-  const pendingEl = document.getElementById('hud-pending');
+  if (!HUD.initialized) initHUD(); // 최초 1회만 DOM 탐색
+
+  const hp = Math.max(0, state.health); 
+  const arm = Math.max(0, state.armor);
+  
+  // 텍스트 업데이트
+  HUD.score.textContent = state.score;
+  HUD.stage.textContent = state.stage;
+  HUD.kills.textContent = state.kills;
+  HUD.damage.textContent = Math.round(state.totalDamage);
+  
   const pendingCnt = state.pendingUpgrades || 0;
-  pendingEl.style.display = pendingCnt > 0 ? 'block' : 'none';
-  document.getElementById('hud-pending-count').textContent = pendingCnt;
-  document.getElementById('bar-hp-fill').style.width = hp + '%';
-  document.getElementById('bar-arm-fill').style.width = (arm / state.maxArmor * 100) + '%';
-  document.getElementById('bar-hp-val').textContent = hp;
-  document.getElementById('bar-arm-val').textContent = arm;
+  HUD.pending.style.display = pendingCnt > 0 ? 'block' : 'none';
+  HUD.pendingCount.textContent = pendingCnt;
+  
+  HUD.hpFill.style.width = hp + '%';
+  HUD.armFill.style.width = (arm / state.maxArmor * 100) + '%';
+  HUD.hpVal.textContent = hp;
+  HUD.armVal.textContent = arm;
 
   const expPct = Math.min(100, (state.exp / state.maxExp) * 100);
-  document.getElementById('bar-exp-fill').style.width = expPct + '%';
-  document.getElementById('bar-exp-val').textContent = 'LV ' + state.level;
+  HUD.expFill.style.width = expPct + '%';
+  HUD.expVal.textContent = 'LV ' + state.level;
 
-  const bulletsEl = document.getElementById('ammo-bullets'); bulletsEl.innerHTML = '';
-  if (gun.clericMode) {
-    if (gun._infiniteMag) {
-      // 클레릭 + 영웅본색 무한 기호
-      const lbl = document.createElement('span'); lbl.style.cssText = 'font-size:10px;color:#aaa;margin-right:3px;'; lbl.textContent = 'L'; bulletsEl.appendChild(lbl);
-      const d1 = document.createElement('div'); d1.className = 'bullet-dot chamber'; bulletsEl.appendChild(d1);
-      const sep = document.createElement('span'); sep.style.cssText = 'font-size:10px;color:#555;margin:0 4px;'; sep.textContent = '|'; bulletsEl.appendChild(sep);
-      const lbl2 = document.createElement('span'); lbl2.style.cssText = 'font-size:10px;color:#aaa;margin-right:3px;'; lbl2.textContent = 'R'; bulletsEl.appendChild(lbl2);
-      const d2 = document.createElement('div'); d2.className = 'bullet-dot chamber'; bulletsEl.appendChild(d2);
-      document.getElementById('ammo-mags').textContent = '\u221e';
-      const reloadMsg = document.getElementById('reload-msg'); reloadMsg.textContent = 'INFINITE'; reloadMsg.style.color = '#ff0';
-    } else {
-      // 정상화된 클레릭 UI (왼손 약실 별도 생성)
-      const lbl = document.createElement('span'); lbl.style.cssText = 'font-size:10px;color:#aaa;margin-right:3px;'; lbl.textContent = 'L'; bulletsEl.appendChild(lbl);
-      const chamberDot = document.createElement('div'); chamberDot.className = 'bullet-dot' + (gun.chamber ? ' chamber' : ' empty'); bulletsEl.appendChild(chamberDot);
-      for (let i = 0; i < gun.MAG_SIZE; i++) {
-        const d = document.createElement('div'); d.className = 'bullet-dot' + (i < gun.mag ? '' : ' empty'); bulletsEl.appendChild(d);
-      }
-      const sep = document.createElement('span'); sep.style.cssText = 'font-size:10px;color:#555;margin:0 4px;'; sep.textContent = '|'; bulletsEl.appendChild(sep);
-      const lbl2 = document.createElement('span'); lbl2.style.cssText = 'font-size:10px;color:#aaa;margin-right:3px;'; lbl2.textContent = 'R'; bulletsEl.appendChild(lbl2);
-      for (let i = 0; i < gun.MAG_SIZE; i++) {
-        const d = document.createElement('div'); d.className = 'bullet-dot' + (i < gun._cleric2ndMag ? '' : ' empty'); bulletsEl.appendChild(d);
-      }
-      document.getElementById('ammo-mags').textContent = `*${gun.mags}`;
-      const reloadMsg = document.getElementById('reload-msg');
-      if (gun.reloading) reloadMsg.textContent = 'RELOADING';
-      else if (gun.mag === 0 && gun.chamber === 0 && gun._cleric2ndMag <= 0) reloadMsg.textContent = 'EMPTY';
-      else reloadMsg.textContent = '';
-      reloadMsg.style.color = '';
-    }
-  } else if (gun._infiniteMag) {
-    // 일반 총기 영웅본색
-    const chamberDot = document.createElement('div'); chamberDot.className = 'bullet-dot chamber'; bulletsEl.appendChild(chamberDot);
-    document.getElementById('ammo-mags').textContent = '\u221e';
-    const reloadMsg = document.getElementById('reload-msg'); reloadMsg.textContent = 'INFINITE'; reloadMsg.style.color = '#ff0';
-  } else {
-    // 일반 총기 UI
-    const chamberDot = document.createElement('div'); chamberDot.className = 'bullet-dot' + (gun.chamber ? ' chamber' : ' empty'); bulletsEl.appendChild(chamberDot);
-    for (let i = 0; i < gun.MAG_SIZE; i++) {
-      const d = document.createElement('div'); d.className = 'bullet-dot' + (i < gun.mag ? '' : ' empty'); bulletsEl.appendChild(d);
-    }
-    document.getElementById('ammo-mags').textContent = `*${gun.mags}`;
-    const reloadMsg = document.getElementById('reload-msg');
-    if (gun.reloading) reloadMsg.textContent = 'RELOADING';
-    else if (gun.chamber === 0 && gun.mag === 0) reloadMsg.textContent = 'EMPTY';
-    else reloadMsg.textContent = '';
-    reloadMsg.style.color = '';
-  }
 }
 
 function spawnNeededItem(x, y) {
@@ -2371,6 +2418,62 @@ function tryShoot() {
   if (gun.chamber === 0 && gun.mag > 0) { gun.chamber = 1; gun.mag--; }
   updateHUD();
 }
+// --- [NEW] 바메이스 공격 로직 (타격 타이밍 미세 조정) ---
+function tryMaceSwing() {
+  if (state.dead || mace.swingTimer > 0) return;
+
+  // 0. 쿨다운 시작
+  mace.swingTimer = mace.cooldown;
+  
+  // 1. 공격 시작음 (미리 재생)
+  sndMelee(); 
+
+  // --- [핵심 수정] 타격 판정을 0.12초 뒤에 폭발적으로 발생시킴 (애니메이션과 동기화) ---
+  const STRIKE_DELAY = 120; // ms 단위
+  setTimeout(() => {
+    // 플레이어가 죽거나 게임이 정지됐으면 중단
+    if (!state.running || state.paused || state.dead) return;
+
+    let hitAnything = false;
+    enemies.forEach(en => {
+      if (!en.active || en.hp <= 0) return;
+      
+      const dx = en.x - player.x, dy = en.y - player.y;
+      const dist = Math.hypot(dx, dy);
+
+      // 사거리 검사 (그릴 때 커진 반지름에 맞춰 살짝 사거리 보정)
+      if (dist <= mace.range + 0.3) {
+        let diff = Math.atan2(dy, dx) - player.angle;
+        while (diff >  Math.PI) diff -= Math.PI * 2;
+        while (diff < -Math.PI) diff += Math.PI * 2;
+
+        // 부채꼴 시야각 판정
+        if (Math.abs(diff) <= mace.cleaveAngle / 2) {
+          applyDamage(en, mace.damage, false, true);
+          applyMagicEffects(en);
+          
+          // 바메이스 특유의 으깨버리는 넉백 (벽 체크 포함)
+          const KNOCKBACK = 3.8; 
+          const kx = Math.cos(player.angle) * KNOCKBACK; 
+          const ky = Math.sin(player.angle) * KNOCKBACK;
+          if (!isWall(en.x + kx, en.y)) en.x += kx;
+          if (!isWall(en.x, en.y + ky)) en.y += ky;
+
+          spawnBlood(en.x, en.y, 6);
+          hitAnything = true;
+        }
+      }
+    });
+
+    if (hitAnything) {
+      meleeFlash = 0.15; 
+      sndEnemyHit(); // '퍽!' 소리
+      // 화면 흔들림 효과 (mace.damage 기반으로 강력하게)
+      startScreenShake(10, 0.15); 
+    }
+  }, STRIKE_DELAY); // STRIKE_DELAY ms 후에 판정 발생
+}
+
 function tryReload() {
   if (gun._infiniteMag) return;
   if (gun.reloading || gun.mags <= 0 || state.dead) return;
@@ -2443,7 +2546,10 @@ function spawnBlood(x, y, count) {
   //---/// 파티클 최대 개수 캡 — 초과 시 생성 억제 (불똥 제외) ///---
   if (particles.length > 200) return;
   const cap = Math.min(count, 3);
-  for (let i = 0; i < cap; i++) particles.push({ x, y, vx: (Math.random()-0.5)*2, vy: (Math.random()-0.5)*2, life: 0.35+Math.random()*0.25, color: '#a00' });
+  for (let i = 0; i < cap; i++) {
+    // [최적화] 매번 새로 생성({})하지 않고 재활용 창고(Pool)에서 꺼내 씁니다.
+    particles.push(ParticlePool.get(x, y, (Math.random()-0.5)*2, (Math.random()-0.5)*2, 0.35+Math.random()*0.25, '#a00'));
+  }
 }
 
 function tryDash() {
@@ -2467,6 +2573,10 @@ function movePlayer(dt) {
   const clampedDeltaX = Math.max(-150, Math.min(150, mouseDeltaX));
   player.angle += clampedDeltaX * MOUSE_SENSITIVITY; 
   mouseDeltaX = 0;
+  
+  // --- [최적화] 매 프레임마다 삼각함수 결과를 캐싱 ---
+  player.cosAngle = Math.cos(player.angle);
+  player.sinAngle = Math.sin(player.angle);
   
   if (player.kbActive > 0) {
     player.kbActive -= dt;
@@ -2528,6 +2638,8 @@ function movePlayer(dt) {
 
   if (keys['KeyR']) tryReload();
   player.shootCooldown = Math.max(0, player.shootCooldown - dt); player.meleeCooldown = Math.max(0, player.meleeCooldown - dt); player.meleeSwing = Math.max(0, player.meleeSwing - dt * 5);
+  // --- [NEW] 바메이스 쿨다운 감소 ---
+  if (mace.swingTimer > 0) mace.swingTimer -= dt;
   if (emptyClickTimer > 0) { emptyClickTimer -= dt; if (emptyClickTimer <= 0) emptyClickCount = 0; }
   player.kickAmt = player.kickAmt > 0 ? Math.max(0, player.kickAmt - dt * 160) : 0;
   muzzleFlash = Math.max(0, muzzleFlash - dt * 14); meleeFlash = Math.max(0, meleeFlash - dt * 6);
@@ -2662,10 +2774,22 @@ function updateEnemies(dt) {
     en.frameTimer += dt; if (en.frameTimer > 0.3) { en.frame = (en.frame+1)%2; en.frameTimer = 0; }
     let canSeePlayer = false;
     if (dist < DETECT_RANGE) {
-      const steps = Math.ceil(dist * 6); const sx = (player.x - en.x) / steps, sy = (player.y - en.y) / steps;
-      let blocked = false;
-      for (let s = 1; s < steps - 1; s++) if (isWall(en.x + sx*s, en.y + sy*s)) { blocked = true; break; }
-      if (!blocked) canSeePlayer = true;
+      en._losTimer = (en._losTimer || 0) - dt;
+      if (en._losTimer <= 0) {
+        // 모든 적이 동시에 연산하지 않도록 약간의 랜덤(0.05)을 섞어 부하를 분산시킵니다.
+        en._losTimer = 0.15 + Math.random() * 0.05; 
+        
+        const steps = Math.ceil(dist * 6); 
+        const sx = (player.x - en.x) / steps, sy = (player.y - en.y) / steps;
+        let blocked = false;
+        for (let s = 1; s < steps - 1; s++) {
+          if (isWall(en.x + sx*s, en.y + sy*s)) { blocked = true; break; }
+        }
+        en._lastCanSee = !blocked; // 결과를 캐싱
+      }
+      canSeePlayer = en._lastCanSee || false; // 캐싱된 결과 재사용
+    } else {
+      en._lastCanSee = false;
     }
     if (canSeePlayer) { en.state = 'chase'; en.alertTimer = 4.0; }
     else if (en.state === 'chase') { en.alertTimer -= dt; if (en.alertTimer <= 0 || dist > LOSE_RANGE) { en.state = 'patrol'; en.patrolTarget = null; } }
@@ -3535,6 +3659,24 @@ function updateItems(dt) {
   });
 }
 
+const ParticlePool = {
+  pool: [],
+  maxSize: 600,
+  get: function(x, y, vx, vy, life, color) {
+    if (this.pool.length > 0) {
+      const p = this.pool.pop();
+      p.x = x; p.y = y; p.vx = vx; p.vy = vy; 
+      p.life = life; p.maxLife = life; p.color = color;
+      p.isEmber = false; p.isAsh = false;
+      return p;
+    }
+    return { x, y, vx, vy, life, maxLife: life, color, isEmber: false, isAsh: false };
+  },
+  release: function(p) {
+    if (this.pool.length < this.maxSize) this.pool.push(p);
+  }
+};
+
 function updateParticles(dt) {
   let keepCount = 0;
   for (let i = 0; i < particles.length; i++) {
@@ -3543,11 +3685,14 @@ function updateParticles(dt) {
     p.y += p.vy * dt;
     p.life -= dt;
     if (p.isEmber) {
-      // 불똥: 속도 빠르게 감쇠, 제자리에서 깜빡이며 오래 남음
       p.vx *= 0.92;
       p.vy *= 0.92;
     }
-    if (p.life > 0) particles[keepCount++] = p;
+    if (p.life > 0) {
+      particles[keepCount++] = p;
+    } else {
+      ParticlePool.release(p); // 다 쓴 파티클을 삭제하는 대신 창고로 반납!
+    }
   }
   particles.length = keepCount;
 }
@@ -3949,15 +4094,16 @@ function drawEnemyBody(en, screenX, spriteTop, spriteH, halfW, hitAlpha, dc) {
 function renderLightningLines() {
   if (lightningLines.length === 0) return;
 
-  //---/// 세그먼트별 순환 색상 팔레트: white / purple / blue ///---
   const BOLT_PALETTE = [
     { glow: '#ffffff', core: '#e8f0ff' }, // white
     { glow: '#aa44ff', core: '#ddb0ff' }, // purple
     { glow: '#2288ff', core: '#aad4ff' }, // blue
   ];
 
+  // --- [최적화] 좌표부터 싹 다 미리 계산해서 모아두기 ---
+  const activeBolts = [];
+  
   lightningLines.forEach(l => {
-    //---/// 월드 → 스크린 투영 ///---
     function project(wx, wy) {
       const dx = wx - player.x, dy = wy - player.y;
       let sa = Math.atan2(dy, dx) - player.angle;
@@ -3973,15 +4119,14 @@ function renderLightningLines() {
     const p1 = project(l.x1, l.y1);
     const p2 = project(l.x2, l.y2);
     if (!p1 || !p2) return;
+    
     const alpha = Math.max(0, l.life / 0.3);
-
-    //---/// 지그재그 포인트 생성 — 매 프레임 재계산으로 빠직거리는 효과 ///---
     const SEG = 6;
     const pts = [p1];
     const perpX = -(p2.sy - p1.sy), perpY = p2.sx - p1.sx;
     const perpLen = Math.hypot(perpX, perpY) || 1;
-    //---/// 색상 시작 오프셋: 번개마다 달라 보이도록 생성 시각 기반 랜덤 ///---
     const colorOffset = Math.floor(Math.random() * BOLT_PALETTE.length);
+    
     for (let i = 1; i < SEG; i++) {
       const t = i / SEG;
       const bx = p1.sx + (p2.sx - p1.sx) * t;
@@ -3990,43 +4135,53 @@ function renderLightningLines() {
       pts.push({ sx: bx + (perpX / perpLen) * jitter, sy: by + (perpY / perpLen) * jitter });
     }
     pts.push(p2);
-
-    ctx.save();
-    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-
-    //---/// 세그먼트별 3레이어 렌더 ///---
-    for (let i = 0; i < pts.length - 1; i++) {
-      const c = BOLT_PALETTE[(colorOffset + i) % BOLT_PALETTE.length];
-      const ax = pts[i].sx,   ay = pts[i].sy;
-      const bx = pts[i+1].sx, by = pts[i+1].sy;
-
-      //---/// 레이어 1: 넓은 외곽 글로우 ///---
-      ctx.shadowColor = c.glow;
-      ctx.shadowBlur = 22;
-      ctx.globalAlpha = alpha * 0.45;
-      ctx.strokeStyle = c.glow;
-      ctx.lineWidth = 5.2;
-      ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
-
-      //---/// 레이어 2: 중간 글로우 ///---
-      ctx.shadowBlur = 10;
-      ctx.globalAlpha = alpha * 0.85;
-      ctx.strokeStyle = c.glow;
-      ctx.lineWidth = 3.25;
-      ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
-
-      //---/// 레이어 3: 코어 ///---
-      ctx.shadowBlur = 0;
-      ctx.globalAlpha = alpha;
-      ctx.strokeStyle = c.core;
-      ctx.lineWidth = 1.3;
-      ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
-    }
-
-    ctx.restore();
+    activeBolts.push({ pts, alpha, colorOffset });
   });
-}
 
+  if (activeBolts.length === 0) return;
+
+  // --- [최적화] shadowBlur 전환을 단 3번만 하도록 레이어별로 일괄 렌더링 ---
+  ctx.save();
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+
+  // 레이어 1: 넓은 외곽 글로우 (제일 무거운 연산)
+  ctx.shadowBlur = 22;
+  ctx.lineWidth = 5.2;
+  activeBolts.forEach(bolt => {
+    ctx.globalAlpha = bolt.alpha * 0.45;
+    for (let i = 0; i < bolt.pts.length - 1; i++) {
+      const c = BOLT_PALETTE[(bolt.colorOffset + i) % BOLT_PALETTE.length];
+      ctx.shadowColor = c.glow; ctx.strokeStyle = c.glow;
+      ctx.beginPath(); ctx.moveTo(bolt.pts[i].sx, bolt.pts[i].sy); ctx.lineTo(bolt.pts[i+1].sx, bolt.pts[i+1].sy); ctx.stroke();
+    }
+  });
+
+  // 레이어 2: 중간 글로우
+  ctx.shadowBlur = 10;
+  ctx.lineWidth = 3.25;
+  activeBolts.forEach(bolt => {
+    ctx.globalAlpha = bolt.alpha * 0.85;
+    for (let i = 0; i < bolt.pts.length - 1; i++) {
+      const c = BOLT_PALETTE[(bolt.colorOffset + i) % BOLT_PALETTE.length];
+      ctx.shadowColor = c.glow; ctx.strokeStyle = c.glow;
+      ctx.beginPath(); ctx.moveTo(bolt.pts[i].sx, bolt.pts[i].sy); ctx.lineTo(bolt.pts[i+1].sx, bolt.pts[i+1].sy); ctx.stroke();
+    }
+  });
+
+  // 레이어 3: 코어 (블러 끄기)
+  ctx.shadowBlur = 0;
+  ctx.lineWidth = 1.3;
+  activeBolts.forEach(bolt => {
+    ctx.globalAlpha = bolt.alpha;
+    for (let i = 0; i < bolt.pts.length - 1; i++) {
+      const c = BOLT_PALETTE[(bolt.colorOffset + i) % BOLT_PALETTE.length];
+      ctx.strokeStyle = c.core;
+      ctx.beginPath(); ctx.moveTo(bolt.pts[i].sx, bolt.pts[i].sy); ctx.lineTo(bolt.pts[i+1].sx, bolt.pts[i+1].sy); ctx.stroke();
+    }
+  });
+
+  ctx.restore();
+}
 function renderExplosionFX(zBuffer) {
   if (explosionFX.length === 0) return;
   
@@ -4127,32 +4282,48 @@ function renderExplosionFX(zBuffer) {
 }
 
 let _screenImgData = null; // 최적화: 전역 이미지 버퍼 재사용
-const _zBuffer = new Float32Array(NUM_RAYS); // [NEW] 전역 1회 할당으로 GC 멈춤 현상(프레임 드랍) 방지!
+const _zBuffer = new Float32Array(NUM_RAYS); // 전역 1회 할당으로 GC 방지
+let _cachedBgData = null; // --- [최적화 5단계] 배경 그라데이션 캐싱 배열 ---
 
 function castRays(bobY) {
-  // 매 프레임 버퍼를 새로 생성하지 않고, 없으면 최초 1회만 생성
-  if (!_screenImgData) _screenImgData = ctx.createImageData(SCREEN_W, SCREEN_H);
+  if (!_screenImgData) {
+    _screenImgData = ctx.createImageData(SCREEN_W, SCREEN_H);
+    
+    // --- [최적화 5단계] 94만 픽셀짜리 천장/바닥을 최초 1회만 연산하여 메모리에 구워버립니다 ---
+    _cachedBgData = new Uint8ClampedArray(SCREEN_W * SCREEN_H * 4);
+    for (let y = 0; y < SCREEN_H; y++) {
+      let r, g, b;
+      if (y < SCREEN_H / 2) {
+        const t = y / (SCREEN_H / 2);
+        r = Math.floor(4 + t * 6); g = Math.floor(5 + t * 7); b = Math.floor(8 + t * 12);
+      } else {
+        const t = (y - SCREEN_H / 2) / (SCREEN_H / 2); r = Math.floor(26 + t*16); g = Math.floor(t*4); b = 0;
+      }
+      for (let x = 0; x < SCREEN_W; x++) { 
+        const i = (y * SCREEN_W + x) * 4; 
+        _cachedBgData[i] = r; _cachedBgData[i+1] = g; _cachedBgData[i+2] = b; _cachedBgData[i+3] = 255; 
+      }
+    }
+  }
   
   const imgData = _screenImgData; 
   const data = imgData.data; 
-  
-  // [NEW] 매번 new Float32Array를 만들지 않고 만들어둔 배열을 덮어쓰며 재사용합니다.
   const zBuffer = _zBuffer;
 
-  for (let y = 0; y < SCREEN_H; y++) {
-    let r, g, b;
-    if (y < SCREEN_H/2) {
-      //---/// 천장: 어두운 회청색 그라데이션 ///---
-      const t = y / (SCREEN_H / 2);
-      r = Math.floor(4 + t * 6); g = Math.floor(5 + t * 7); b = Math.floor(8 + t * 12);
-    } else {
-      //---/// 바닥: 기존 어두운 붉은 갈색 ///---
-      const t = (y - SCREEN_H/2) / (SCREEN_H/2); r = Math.floor(26 + t*16); g = Math.floor(t*4); b = 0;
-    }
-    for (let x = 0; x < SCREEN_W; x++) { const i = (y*SCREEN_W+x)*4; data[i]=r; data[i+1]=g; data[i+2]=b; data[i+3]=255; }
-  }
+  // --- [최적화 5단계] 매 프레임 돌던 이중 루프 대신, C언어급 속도의 메모리 복사 단 1줄로 덮어쓰기! ---
+  data.set(_cachedBgData);
+
+  const pCos = Math.cos(player.angle);
+  const pSin = Math.sin(player.angle);
+
   for (let ray = 0; ray < NUM_RAYS; ray++) {
-    const rayAngle = player.angle - HALF_FOV + (ray/NUM_RAYS)*FOV; const cosA = Math.cos(rayAngle), sinA = Math.sin(rayAngle);
+    const rayAngle = player.angle + RAY_ANGLES[ray];
+    
+    // --- [최적화 6단계] 삼각함수 덧셈정리를 활용하여 고비용 Math.cos/sin 완전 제거! ---
+    // cos(a+b) = cos(a)cos(b) - sin(a)sin(b)
+    const cosA = pCos * RAY_COS[ray] - pSin * RAY_SIN[ray];
+    const sinA = pSin * RAY_COS[ray] + pCos * RAY_SIN[ray];
+    
     let mapX = Math.floor(player.x), mapY = Math.floor(player.y);
     const deltaX = Math.abs(1/(cosA||1e-5)), deltaY = Math.abs(1/(sinA||1e-5));
     let stepX, stepY, sideDistX, sideDistY;
@@ -5017,46 +5188,153 @@ function renderGunCleric() {
   drawPistol(leftX,  true,  leftKick,  muzzleFlash);
   drawPistol(rightX, false, rightKick, gun._clericFlash);
 }
-function renderMeleeElbow(t) {
-  if (t <= 0) return;
-
-  // 타격 애니메이션의 텐션 (빠르게 찌르고 부드럽게 돌아감)
-  const swingPhase = t > 0.5 ? (1 - t) * 2 : t * 2;
-  const easePow = Math.pow(Math.sin(swingPhase * Math.PI * 0.5), 0.6); 
-
-  const hitX = SCREEN_W / 2 + 30;  // 타격 지점 (화면 중앙 약간 우측)
-  const hitY = SCREEN_H / 2 + 100; // 화면 중앙 약간 아래
-
-  const startX = SCREEN_W + 300;   // 화면 우측 밖 (어깨 시작점)
-  const startY = SCREEN_H + 200;   // 화면 하단 밖
-
-  const currentX = startX + (hitX - startX) * easePow;
-  const currentY = startY + (hitY - startY) * easePow;
+// --- [NEW] 유러피안 바메이스 렌더링 (타격감 강화 버전 - 팍! 스윽) ---
+function renderMace() {
+  const cx = SCREEN_W / 2;
+  const cy = SCREEN_H;
+  // 걷기 반동은 그대로 유지
+  const bob = Math.sin(player.bobPhase) * player.bobAmt * 8;
 
   ctx.save();
-  ctx.translate(currentX, currentY);
-  ctx.rotate(-easePow * 0.4); // 팔꿈치가 꺾이며 들어오는 각도
+  ctx.shadowBlur = 0; // 최적화
 
-  // 1. 위팔 (어깨 ~ 팔꿈치)
-  ctx.fillStyle = '#222';
-  ctx.beginPath();
-  ctx.moveTo(0, 0);
-  ctx.lineTo(250, 100);
-  ctx.lineTo(280, 250);
-  ctx.lineTo(20, 80);
-  ctx.fill();
+  // 대기 위치 (화면 오른쪽 아래)
+  let offsetX = 220;
+  let offsetY = -30;
+  let angle = Math.PI / 5; // 36도 기울임 (택티컬 레트로 포즈)
 
-  // 2. 아래팔 (팔꿈치 ~ 손목)
-  ctx.fillStyle = '#2a2a2a';
-  ctx.beginPath();
-  ctx.moveTo(0, 0);
-  ctx.lineTo(-140, 60);
-  ctx.lineTo(-110, 120);
-  ctx.lineTo(20, 80);
-  ctx.fill();
+  // --- [핵심 수정] Easings 애니메이션 (팍! 스윽 느낌 구현) ---
+  if (mace.swingTimer > 0) {
+    const totalProgress = 1 - (mace.swingTimer / mace.cooldown);
+    
+    // 공격 지속 시간을 1.0 (100%) 기준으로 봤을 때의 스케일링
+    if (totalProgress < 0.20) { 
+      // 1단계: 강하게 내려치기 (0%~20% 구간, 아주 짧게 팍!)
+      const t = totalProgress / 0.20; // 0 -> 1 로 정규화
+      const easeT = easeOutBack(t); // 후반 감속 + 살짝 튕김 적용
+
+      // 타격 반경을 훨씬 크게 확장 (사선 타격)
+      offsetX = 220 - (easeT * 550); // 화면 왼쪽 끝까지!
+      offsetY = -30 + (easeT * 250); // 아래로 크게 휘두름
+      angle = Math.PI / 5 - (easeT * Math.PI * 1.5); // 한 바퀴 반 회전
+
+    } else if (totalProgress < 0.25) {
+      // 2단계: 타격 지속 프레임 (20%~25% 구간, 잠깐 멈춤)
+      // 이 구간에서 실제 setTimeout 데미지 판정이 터짐
+      offsetX = -330;
+      offsetY = 220;
+      angle = Math.PI / 5 - (Math.PI * 1.5);
+
+    } else {
+      // 3단계: 제자리로 회수 (25%~100% 구간, 천천히 스윽~)
+      const t = (totalProgress - 0.25) / 0.75; // 0 -> 1 로 정규화
+      const easeT = easeOutQuad(t); // 후반 부드러운 감속 적용
+
+      // 팍! 쳤던 위치(-330)에서 대기 위치(220)로 감속하며 복귀
+      offsetX = -330 + (easeT * (220 - (-330))); 
+      offsetY = 220 + (easeT * (-30 - 220));
+      angle = (Math.PI / 5 - (Math.PI * 1.5)) + (easeT * (Math.PI / 5 - (Math.PI / 5 - (Math.PI * 1.5))));
+    }
+  }
+
+  // 최종 위치 적용 (걷기 반동 포함)
+  ctx.translate(cx + offsetX, cy + offsetY + bob);
+  ctx.rotate(angle);
+
+  // --- 그래픽 디테일 업그레이드 ---
+  // 1. 손잡이 (가죽 느낌 다크 브라운)
+  ctx.fillStyle = '#3e2723';
+  ctx.fillRect(-12, -100, 24, 130);
+  
+  // 2. 폼멜 (손잡이 끝 철장식)
+  ctx.fillStyle = '#7f8c8d';
+  ctx.beginPath(); ctx.arc(0, 30, 20, 0, Math.PI*2); ctx.fill();
+  
+  // 3. 메인 철퇴 바(Bar) (리얼리스틱 그레이)
+  ctx.fillStyle = '#95a5a6';
+  ctx.fillRect(-16, -320, 32, 230);
+  ctx.fillStyle = '#bdc3c7'; // 하이라이트(빛 반사)
+  ctx.fillRect(-8, -320, 12, 230);
+
+  // 4. 플랜지 (뼈를 으깨는 돌기 - 더욱 뾰족하게)
+  ctx.fillStyle = '#7f8c8d';
+  for(let i = 0; i < 4; i++) {
+    const yPos = -290 + (i * 50);
+    ctx.beginPath();
+    ctx.moveTo(-16, yPos - 15); ctx.lineTo(-38, yPos); ctx.lineTo(-16, yPos + 15);
+    ctx.moveTo(16, yPos - 15);  ctx.lineTo(38, yPos);  ctx.lineTo(16, yPos + 15);
+    ctx.fill();
+  }
 
   ctx.restore();
 }
+
+// --- [NEW] 팔꿈치(우클릭 메카) 공격 렌더링 (팍! 스윽 타격감 강화) ---
+function renderMeleeElbow(swing) {
+  if (swing <= 0) return;
+  const cx = SCREEN_W / 2;
+  const cy = SCREEN_H;
+
+  // 걷기 반동 제외 (근접 공격 시에는 안정적인 조준이 필요)
+  
+  ctx.save();
+  ctx.shadowBlur = 0; // 최적화
+
+  // 공격 지속 시간 (기존 swingdt * 5 비율 기반으로 대략적인 COOLDOWN 추정)
+  const MELEE_SWING_MAX = 1.0; 
+  const totalProgress = swing / MELEE_SWING_MAX; // 0 -> 1 로 정규화
+  
+  let offsetX = 0;
+  let offsetY = 0;
+  let angle = 0;
+
+  // --- [핵심 수정] Easings 애니메이션 (팍! 스윽 느낌 구현) ---
+  if (totalProgress < 0.25) { 
+    // 1단계: 강하게 뻗기 (0%~25% 구간, '팍!' 터지는 펀치)
+    const t = totalProgress / 0.25; // 0 -> 1 로 정규화
+    const easeT = easeOutBack(t); // 후반 감속 + 살짝 튕김 적용
+
+    // 화면 가운데에서 앞으로 팍! 뻗어나감
+    offsetX = -(easeT * 120); 
+    offsetY = -(easeT * 350); // 앞으로 쭉!
+    angle = -(easeT * Math.PI / 12); // 사선으로 꽂음
+
+  } else {
+    // 2단계: 천천히 회수 (25%~100% 구간, '스윽~' 복귀)
+    const t = (totalProgress - 0.25) / 0.75; // 0 -> 1 로 정규화
+    const easeT = easeOutQuad(t); // 후반 부드러운 감속 적용
+
+    // 팍! 뻗었던 위치(-350)에서 제자리(0)로 감속하며 복귀
+    offsetX = -120 + (easeT * (0 - (-120)));
+    offsetY = -350 + (easeT * (0 - (-350)));
+    angle = -(Math.PI / 12) + (easeT * (Math.PI / 12));
+  }
+
+  // 최종 위치 적용
+  ctx.translate(cx + offsetX, cy + offsetY);
+  ctx.rotate(angle);
+
+  // --- 팔꿈치 그래픽 (레트로 스타일) ---
+  // 1. 소매 (팔꿈치 위 팔)
+  ctx.fillStyle = '#081c15';
+  ctx.fillRect(-60, -80, 120, 160);
+  
+  // 2. 소매 끝동
+  ctx.fillStyle = '#1b4332';
+  ctx.fillRect(-65, -90, 130, 20);
+  
+  // 3. 살색 (팔뚝)
+  ctx.fillStyle = '#edc9af';
+  ctx.fillRect(-50, -220, 100, 140);
+  
+  // 4. 전술 팔찌 (장식)
+  ctx.fillStyle = '#7f8c8d';
+  ctx.fillRect(-52, -210, 104, 15);
+
+  ctx.restore();
+}
+
+
 //---/// 일반 단일 총기 (오리지널 비주얼 완전 복구) ///---
 function renderGun() {
   if (gun.clericMode) { renderGunCleric(); return; }
@@ -5107,11 +5385,132 @@ function renderGun() {
   ctx.restore();
 }
 function renderCrosshair() {
-  const cx=SCREEN_W/2, cy=SCREEN_H/2, sz=10, gap=3;
-  ctx.save(); ctx.strokeStyle='rgba(255,255,255,0.7)'; ctx.lineWidth=1.5; ctx.beginPath();
-  ctx.moveTo(cx-sz-gap,cy); ctx.lineTo(cx-gap,cy); ctx.moveTo(cx+gap,cy); ctx.lineTo(cx+sz+gap,cy);
-  ctx.moveTo(cx,cy-sz-gap); ctx.lineTo(cx,cy-gap); ctx.moveTo(cx,cy+gap); ctx.lineTo(cx,cy+sz+gap);
-  ctx.stroke(); ctx.restore();
+  const cx = SCREEN_W / 2;
+  const cy = SCREEN_H / 2;
+  const sz = 10;
+  const gap = 3;
+
+  ctx.save();
+  ctx.shadowBlur = 0;
+
+  // 1. 기본 에임(십자선) - 중앙 고정
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+  ctx.lineWidth = 1.5;
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
+  ctx.shadowBlur = 3;
+  ctx.beginPath();
+  ctx.moveTo(cx-sz-gap, cy); ctx.lineTo(cx-gap, cy);
+  ctx.moveTo(cx+gap, cy); ctx.lineTo(cx+sz+gap, cy);
+  ctx.moveTo(cx, cy-sz-gap); ctx.lineTo(cx, cy-gap);
+  ctx.moveTo(cx, cy+gap); ctx.lineTo(cx, cy+sz+gap);
+  ctx.stroke();
+
+  ctx.shadowBlur = 0;
+
+  if (gun._infiniteMag) {
+    ctx.font = "bold 32px Share Tech Mono"; 
+    ctx.fillStyle = '#44ff44'; 
+    ctx.textAlign = "center";
+    ctx.fillText('∞', cx, cy + 40); 
+    ctx.restore();
+    return; 
+  }
+
+  // --- [위치 제어 변수] ---
+  const ammoOffset = 75;   // 잔탄 게이지가 커진 만큼 좌우 거리를 100 -> 130으로 벌림
+  const magOffsetY = 50;    // 탄창 게이지 하단 거리 유지
+
+  // --- [크기 업그레이드] 양옆 잔탄 원형 게이지 전용 설정 ---
+  const arcRadius = 55;        // 반지름 38 -> 55로 대폭 확대
+  const arcAngle = Math.PI / 3; // 호의 각도 45도 -> 60도로 길게 연장
+  const halfArc = arcAngle / 2;
+  ctx.lineCap = 'round'; 
+
+  function drawArcGauge(x, y, startAngle, endAngle, isCCW, current, max, color) {
+    const ratio = max > 0 ? Math.max(0, Math.min(1, current / max)) : 0;
+    const totalSweep = isCCW ? (startAngle - endAngle) : (endAngle - startAngle);
+    
+    // 잔탄 게이지 배경 두께 6 -> 8 로 확대
+    ctx.beginPath();
+    ctx.arc(x, y, arcRadius, startAngle, endAngle, isCCW);
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.5)';
+    ctx.lineWidth = 8; 
+    ctx.stroke();
+
+    // 잔탄 게이지 채움 두께 4.5 -> 6 으로 확대
+    if (ratio > 0) {
+      ctx.beginPath();
+      const currentEnd = isCCW ? (startAngle - totalSweep * ratio) : (startAngle + totalSweep * ratio);
+      ctx.arc(x, y, arcRadius, startAngle, currentEnd, isCCW);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 6; 
+      ctx.stroke();
+    }
+  }
+
+  function getGaugeColor(current, max) {
+    const ratio = max > 0 ? current / max : 0;
+    if (ratio > 0.6) return '#44ff44'; 
+    if (ratio > 0.3) return '#ffcc00'; 
+    return '#ff3333';                  
+  }
+
+  // 잔탄용 폰트 크기 14px -> 20px로 확대
+  ctx.font = "bold 20px Share Tech Mono";
+
+  // 2. 우측 총기 잔탄
+  const rightX = cx + ammoOffset;
+  const rightColor = getGaugeColor(gun.mag, gun.MAG_SIZE);
+  drawArcGauge(rightX, cy, halfArc, -halfArc, true, gun.mag, gun.MAG_SIZE, rightColor);
+  
+  ctx.fillStyle = rightColor;
+  ctx.textAlign = "left";
+  ctx.fillText(gun.mag, rightX + arcRadius + 15, cy + 7);
+
+  // 3. 좌측 총기 잔탄 (건카타 발동 시 대칭 렌더링)
+  if (gun.clericMode && gun._cleric2ndMag !== undefined) {
+    const leftX = cx - ammoOffset;
+    const leftColor = getGaugeColor(gun._cleric2ndMag, gun.MAG_SIZE);
+    drawArcGauge(leftX, cy, Math.PI - halfArc, Math.PI + halfArc, false, gun._cleric2ndMag, gun.MAG_SIZE, leftColor);
+    
+    ctx.fillStyle = leftColor;
+    ctx.textAlign = "right";
+    ctx.fillText(gun._cleric2ndMag, leftX - arcRadius - 15, cy + 7);
+  }
+
+  // --- 4. 하단 여분 탄창(MAG) 직선 바 (기존 크기 유지) ---
+  const maxMags = 9; 
+  const magColor = getGaugeColor(gun.mags, maxMags);
+  const barWidth = 64; 
+  
+  const startX = cx - (barWidth / 2);
+  const barY = cy + 40 + magOffsetY; // 잔탄 크기와 무관하게 위치 고정
+  const magRatio = Math.max(0, Math.min(1, gun.mags / maxMags));
+
+  // 탄창 직선 바는 기존 두께(6 / 4.5) 유지
+  ctx.beginPath();
+  ctx.moveTo(startX, barY);
+  ctx.lineTo(startX + barWidth, barY);
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.5)';
+  ctx.lineWidth = 6;
+  ctx.stroke();
+
+  if (magRatio > 0) {
+    ctx.beginPath();
+    ctx.moveTo(startX, barY);
+    ctx.lineTo(startX + (barWidth * magRatio), barY);
+    ctx.strokeStyle = magColor;
+    ctx.lineWidth = 4.5;
+    ctx.stroke();
+  }
+  
+  // 탄창 텍스트는 14px 폰트로 되돌려서 렌더링
+  ctx.font = "bold 14px Share Tech Mono";
+  ctx.fillStyle = magColor;
+  ctx.textAlign = "center";
+  ctx.fillText(`M${gun.mags}`, cx, barY + 18);
+
+  ctx.restore();
 }
 
 
@@ -5184,24 +5583,29 @@ function renderDamageFlash(dt) {
     ctx.restore();
   }
 
-  // 3. 공격받은 방향을 알려주는 피격 인디케이터
-  damageIndicators = damageIndicators.filter(ind => ind.alpha > 0);
+  // 3. 공격받은 방향을 알려주는 피격 인디케이터 (filter 및 이중 루프 최적화 완료)
   const cx = SCREEN_W / 2; const cy = SCREEN_H / 2; const radius = Math.min(cx, cy) - 120; 
-
-  damageIndicators.forEach(ind => {
+  let keepInd = 0;
+  
+  for (let i = 0; i < damageIndicators.length; i++) {
+    const ind = damageIndicators[i];
     ind.alpha -= dt * 1.5; 
-    if (ind.alpha <= 0) return;
-    let relAngle = ind.angle - player.angle;
-    while (relAngle > Math.PI) relAngle -= Math.PI * 2;
-    while (relAngle < -Math.PI) relAngle += Math.PI * 2;
+    
+    if (ind.alpha > 0) {
+      damageIndicators[keepInd++] = ind;
+      let relAngle = ind.angle - player.angle;
+      while (relAngle > Math.PI) relAngle -= Math.PI * 2;
+      while (relAngle < -Math.PI) relAngle += Math.PI * 2;
 
-    ctx.save(); ctx.translate(cx, cy); ctx.rotate(relAngle - Math.PI / 2);
-    ctx.lineWidth = 30; ctx.lineCap = 'round'; ctx.shadowBlur = 20; ctx.shadowColor = '#f00'; ctx.strokeStyle = `rgba(255, 0, 0, ${ind.alpha * 0.8})`;
-    ctx.beginPath(); ctx.arc(0, 0, radius, -Math.PI / 4, Math.PI / 4); ctx.stroke();
-    ctx.restore();
-  });
+      ctx.save(); ctx.translate(cx, cy); ctx.rotate(relAngle - Math.PI / 2);
+      ctx.lineWidth = 30; ctx.lineCap = 'round'; ctx.shadowBlur = 20; ctx.shadowColor = '#f00'; ctx.strokeStyle = `rgba(255, 0, 0, ${ind.alpha * 0.8})`;
+      ctx.beginPath(); ctx.arc(0, 0, radius, -Math.PI / 4, Math.PI / 4); ctx.stroke();
+      ctx.restore();
+    }
+  }
+  damageIndicators.length = keepInd;
 
-  // 4. [NEW] 보스 장판(AoE) 회피 경고 오버레이 (플레이어가 아직 안 터진 장판 안에 서 있을 때)
+  // 4. [NEW] 보스 장판(AoE) 회피 경고 오버레이
   let inDangerZone = false;
   if (typeof bossAoes !== 'undefined') {
     bossAoes.forEach(a => {
@@ -5554,11 +5958,18 @@ function showUpgradeUI(onDone) {
 function renderPellets(dt) {
   if (screenPellets.length === 0) return;
   
-  // 수명 감소 및 소멸 처리
-  screenPellets.forEach(p => p.life -= dt);
-  screenPellets = screenPellets.filter(p => p.life > 0);
+  // [최적화] filter와 forEach를 통합하여 새 배열 생성(GC) 방지
+  let keepCount = 0;
+  for (let i = 0; i < screenPellets.length; i++) {
+    const p = screenPellets[i];
+    p.life -= dt;
+    if (p.life > 0) {
+      screenPellets[keepCount++] = p;
+    }
+  }
+  screenPellets.length = keepCount;
   
-  const cx = SCREEN_W / 2; 
+  const cx = SCREEN_W / 2;
   const cy = SCREEN_H / 2; 
   const pixPerRad = SCREEN_W / FOV;
   
@@ -5579,10 +5990,11 @@ function renderPellets(dt) {
     
     const screenX = cx + sa * pixPerRad;
 
-    let gunX = SCREEN_W / 2 + 14; 
-    if (p.side === 'left') gunX = SCREEN_W / 2 - 140;
-    else if (p.side === 'right') gunX = SCREEN_W / 2 + 140;
-    const gunY = SCREEN_H - 100; 
+    let gunX = SCREEN_W / 2 ;   // 총구 위치에 더 가깝게
+    if (p.side === 'left') gunX = SCREEN_W / 2 - 120;
+    else if (p.side === 'right') gunX = SCREEN_W / 2 + 120;
+
+    const gunY = SCREEN_H - 55;
     
     const targetX = screenX; 
     const targetY = cy - 20;
@@ -5669,43 +6081,56 @@ function spawnShootEffects(posType) {
 function renderScreenParticles(dt) {
   if (screenParticles.length === 0) return;
   ctx.save();
-  for (let i = screenParticles.length - 1; i >= 0; i--) {
+  
+  let keepCount = 0;
+  for (let i = 0; i < screenParticles.length; i++) {
     const p = screenParticles[i];
     p.life -= dt;
-    if (p.life <= 0) { screenParticles.splice(i, 1); continue; }
-
-    p.x += p.vx * dt;
-    p.y += p.vy * dt;
-
-    if (p.type === 'shell') {
-      p.vy += 1200 * dt; // 중력 작용
-      p.rotation += p.rotSpeed * dt;
+    
+    if (p.life > 0) {
+      screenParticles[keepCount++] = p; // 죽은 파티클을 덮어쓰며 앞으로 당김
       
-      ctx.save();
-      ctx.translate(p.x, p.y);
-      ctx.rotate(p.rotation);
-      ctx.fillStyle = '#ffaa00'; // 황동색 탄피
-      ctx.fillRect(-6, -3, 12, 6);
-      ctx.fillStyle = '#cc7700'; // 탄피 음영
-      ctx.fillRect(-6, 1, 12, 2);
-      ctx.restore();
-      
-    } else if (p.type === 'smoke') {
-      p.size += 30 * dt; // 연기가 서서히 커짐
-      ctx.globalAlpha = Math.max(0, p.life) * 0.25; // 점점 투명해짐
-      ctx.fillStyle = '#aaaaaa';
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-      ctx.fill();
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+
+      if (p.type === 'shell') {
+        p.vy += 1200 * dt;
+        p.rotation += p.rotSpeed * dt;
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        ctx.rotate(p.rotation);
+        ctx.fillStyle = '#ffaa00';
+        ctx.fillRect(-6, -3, 12, 6);
+        ctx.fillStyle = '#cc7700';
+        ctx.fillRect(-6, 1, 12, 2);
+        ctx.restore();
+      } else if (p.type === 'smoke') {
+        p.size += 30 * dt;
+        ctx.globalAlpha = Math.max(0, p.life) * 0.25;
+        ctx.fillStyle = '#aaaaaa';
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
   }
+  screenParticles.length = keepCount; // 끝에 남은 찌꺼기 싹둑 자르기
+  
   ctx.restore();
 }
 //---/// 적 레이더 — 잔여 적 4명 이하 + 비보스 스테이지 시 벽 너머 적 위치 오버레이 표시 ///---
 function renderEnemyRadar(zBuffer) {
   if (state.isBossStage || state.isShop) return;
-  const alive = enemies.filter(e => e.active && e.hp > 0);
+  // [최적화 2단계 연계] filter 대신 루프로 카운트 및 배열 정리 (GC 방지)
+  const alive = [];
+  for (let i = 0; i < enemies.length; i++) {
+    if (enemies[i].active && enemies[i].hp > 0) alive.push(enemies[i]);
+  }
   if (alive.length === 0 || alive.length > 4) return;
+
+  // --- [최적화] save/restore를 루프 바깥으로 한 번만 빼서 오버헤드 제거 ---
+  ctx.save();
+  ctx.textAlign = 'center';
 
   alive.forEach(en => {
     const dx = en.x - player.x, dy = en.y - player.y;
@@ -5717,25 +6142,20 @@ function renderEnemyRadar(zBuffer) {
     const corrected = dist * Math.cos(sa);
     const screenX = Math.floor(((sa / FOV) + 0.5) * SCREEN_W);
 
-    //---/// 시야 내(FOV + 약간 여유)에만 표시 ///---
     if (Math.abs(sa) > HALF_FOV + 0.15) return;
 
     const ri = Math.min(NUM_RAYS - 1, Math.max(0, Math.round(screenX * NUM_RAYS / SCREEN_W)));
-    //---/// 이미 벽 앞에 보이면 표시 안 함 ///---
     if (corrected < zBuffer[ri]) return;
 
-    //---/// 스프라이트 높이 기준 위치 계산 ///---
     const spriteH = Math.floor((SCREEN_H / corrected) * 0.85);
     const spriteTop = Math.floor((SCREEN_H - spriteH) / 2);
     const centerY = spriteTop + spriteH * 0.5;
 
-    //---/// 거리에 따른 투명도 — 가까울수록 선명 ///---
     const alpha = Math.max(0.25, Math.min(0.75, 1 - dist / (MAX_DEPTH * 0.8)));
     const sz = Math.max(8, Math.min(32, spriteH * 0.35));
 
-    ctx.save();
     ctx.globalAlpha = alpha;
-    //---/// 십자 마커 + 외곽 원 — 변종별 색상 ///---
+    
     let radarColor = '#ff4444'; let radarGlow = '#ff0000';
     if (en.isShooter && !en.isSiege) { radarColor = '#cc88ff'; radarGlow = '#aa00ff'; }
     if (en.isSiege)    { radarColor = '#ff8833'; radarGlow = '#cc4400'; }
@@ -5743,23 +6163,25 @@ function renderEnemyRadar(zBuffer) {
     if (en.isPhantom)  { radarColor = '#cc55ff'; radarGlow = '#8800cc'; }
     if (en.isScreamer) { radarColor = '#ffcc00'; radarGlow = '#aa8800'; }
     if (en.isIronclad) { radarColor = '#80ccff'; radarGlow = '#004488'; }
+    
     ctx.strokeStyle = radarColor;
     ctx.lineWidth = en.isBrute || en.isIronclad ? 3 : 2;
     ctx.shadowColor = radarGlow;
     ctx.shadowBlur = 8;
+    
     ctx.beginPath(); ctx.arc(screenX, centerY, sz * 0.6, 0, Math.PI * 2); ctx.stroke();
     ctx.beginPath();
     ctx.moveTo(screenX - sz * 0.8, centerY); ctx.lineTo(screenX + sz * 0.8, centerY);
     ctx.moveTo(screenX, centerY - sz * 0.8); ctx.lineTo(screenX, centerY + sz * 0.8);
     ctx.stroke();
-    //---/// 거리 숫자 표시 ///---
+    
     ctx.font = `bold ${Math.max(10, sz * 0.7)}px Share Tech Mono`;
-    ctx.textAlign = 'center';
     ctx.fillStyle = radarColor;
     ctx.shadowBlur = 4;
     ctx.fillText(dist.toFixed(1), screenX, centerY + sz * 1.4);
-    ctx.restore();
   });
+  
+  ctx.restore();
 }
 
 function renderTelegraphs() {
@@ -5895,11 +6317,13 @@ function gameLoop(timestamp) {
   renderTelegraphs(); 
   renderEnemyRadar(zBuffer); // 적 레이더 
   renderSkyStrikes();        // 보스 번개 이펙트
-  renderGun(); 
+  renderPellets(dt);
+  renderMeleeElbow(player.meleeSwing);
+  if (currentWeapon === 'gun') renderGun(); 
+  else renderMace();
   renderMeleeElbow(player.meleeSwing);
   renderCrosshair(); 
   renderDamageFlash(dt); 
-  renderPellets(dt); 
   renderPortalBeam();
   renderScreenParticles(dt)
 
