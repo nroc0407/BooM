@@ -2303,24 +2303,14 @@ function tryShoot() {
       tColor = '#ffffcc'; tGlow = '#ffff00'; tSize = 2; tLife = 0.08; tSpeed = 0.5; tBlur = 4;
   }
 
-  // 1. 메인 궤적 (조준선 방향으로 살짝 흔들리며 날아감)
+  // [수정 완료] 무조건 단 하나의 메인 궤적만 배열에 넣습니다.
   screenPellets.push({
       angle: player.angle + (Math.random()-0.5)*0.015,
       life: tLife, maxLife: tLife,
       size: tSize, side: fireSide,
       color: tColor, glow: tGlow, blur: tBlur, speedMult: tSpeed, alphaMult: 1.0
   });
-  
-  // 2. 20mm와 .45cal은 화면에 잔상(코어 궤적)을 남겨 타격감을 더함
-  if (gun.CALIBER !== '9mm') {
-    screenPellets.push({
-        angle: player.angle + (Math.random()-0.5)*0.03,
-        life: tLife * 0.6, maxLife: tLife * 0.6,
-        size: tSize * 0.4, side: fireSide,
-        color: '#ffffff', glow: tGlow, blur: tBlur * 0.5, speedMult: tSpeed * 1.3, alphaMult: 0.5
-    });
-  }
-
+ 
   const candidates = [];
   //---/// 벽관통 허용 칸수: pierce +1, 20mm +1, 중복 보유 시 합산 ///---
   const wallPassLimit = (UPG('pierce') >= 3 ? 1 : 0) + (gun.CALIBER === '20mm' ? 1 : 0);
@@ -5563,34 +5553,78 @@ function showUpgradeUI(onDone) {
 }
 function renderPellets(dt) {
   if (screenPellets.length === 0) return;
-  screenPellets = screenPellets.filter(p => p.life > 0);
-  const cx = SCREEN_W / 2; const cy = SCREEN_H / 2; const pixPerRad = SCREEN_W / FOV;
   
+  // 수명 감소 및 소멸 처리
+  screenPellets.forEach(p => p.life -= dt);
+  screenPellets = screenPellets.filter(p => p.life > 0);
+  
+  const cx = SCREEN_W / 2; 
+  const cy = SCREEN_H / 2; 
+  const pixPerRad = SCREEN_W / FOV;
+  
+  ctx.save(); 
+  ctx.globalCompositeOperation = 'lighter';
+
+  // [수정됨] 억지로 묶어주던 renderedTimes 로직을 삭제했습니다.
+  // 발사 로직에서 이미 필요한 개수만큼만 넘겨주므로 그대로 그립니다.
+
   screenPellets.forEach(p => {
-    p.life -= dt; const t = Math.max(0, p.life / p.maxLife);
-    const relAngle = p.angle - player.angle; const screenX = cx + relAngle * pixPerRad;
+    const t = Math.max(0, p.life / p.maxLife);
+    const easeT = 1 - Math.pow(1 - t, 2); 
     
-    // 발사된 손(side)에 따라 시각 효과의 출발점(gunX)을 다르게 설정
-    let gunX = SCREEN_W / 2 - 14; 
+    const relAngle = p.angle - player.angle; 
+    let sa = relAngle;
+    while (sa >  Math.PI) sa -= Math.PI * 2;
+    while (sa < -Math.PI) sa += Math.PI * 2;
+    
+    const screenX = cx + sa * pixPerRad;
+
+    let gunX = SCREEN_W / 2 + 14; 
     if (p.side === 'left') gunX = SCREEN_W / 2 - 140;
     else if (p.side === 'right') gunX = SCREEN_W / 2 + 140;
+    const gunY = SCREEN_H - 100; 
     
-    const gunY = SCREEN_H - 120;
-    const targetX = Math.max(0, Math.min(SCREEN_W, screenX)); const targetY = cy - 40;
-    const prog = 1 - t; const sx = gunX + (targetX - gunX) * prog; const sy = gunY + (targetY - gunY) * prog;
-    const speedMult = p.speedMult || 0.18;
-    const ex = gunX + (targetX - gunX) * Math.min(1, prog + speedMult); const ey = gunY + (targetY - gunY) * Math.min(1, prog + speedMult);
+    const targetX = screenX; 
+    const targetY = cy - 20;
     
-    ctx.save(); 
-    ctx.globalAlpha = t * (p.alphaMult || 0.85); 
-    ctx.strokeStyle = p.color || '#ffe6a0'; 
-    ctx.lineWidth = p.size * t;
+    const prog = 1 - easeT; 
+    
+    const speedMult = p.speedMult || 0.4; 
+    const tailLength = speedMult * 0.6; 
+    
+    const sx = gunX + (targetX - gunX) * Math.max(0, prog - tailLength); 
+    const sy = gunY + (targetY - gunY) * Math.max(0, prog - tailLength);
+    const ex = gunX + (targetX - gunX) * Math.min(1, prog + speedMult); 
+    const ey = gunY + (targetY - gunY) * Math.min(1, prog + speedMult);
+    
+    const baseSize = Math.max(1, (p.size || 2) * 1.0);
+    const alpha = easeT * (p.alphaMult || 1.0);
+    
     ctx.lineCap = 'round';
-    ctx.shadowColor = p.glow || '#ffcc44'; 
-    ctx.shadowBlur = p.blur || 8; 
-    ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(ex, ey); ctx.stroke(); 
-    ctx.restore();
+    
+    // 1. 외곽 예광탄 글로우
+    ctx.beginPath(); 
+    ctx.moveTo(sx, sy); 
+    ctx.lineTo(ex, ey); 
+    ctx.strokeStyle = p.color || '#ff4400'; 
+    ctx.lineWidth = baseSize * 2.8; 
+    ctx.globalAlpha = alpha * 0.8;
+    ctx.shadowColor = p.glow || '#ff1100'; 
+    ctx.shadowBlur = 6; 
+    ctx.stroke(); 
+    
+    // 2. 중심 초고온 코어
+    ctx.beginPath(); 
+    ctx.moveTo(sx, sy); 
+    ctx.lineTo(ex, ey); 
+    ctx.strokeStyle = '#ffffff'; 
+    ctx.lineWidth = baseSize * 0.8; 
+    ctx.globalAlpha = alpha;
+    ctx.shadowBlur = 0; 
+    ctx.stroke();
   });
+  
+  ctx.restore();
 }
 function spawnShootEffects(posType) {
   let startX, startY = SCREEN_H - 130, dirX;
