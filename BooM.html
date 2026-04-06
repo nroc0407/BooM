@@ -387,11 +387,19 @@ const BGM = (() => {
   };
 })();
 
+const noiseCache = new Map();
+
 function makeNoise(duration) {
+  const key = duration.toFixed(3);
+  if (noiseCache.has(key)) return noiseCache.get(key);
+
   const frames = Math.floor(getAudioCtx().sampleRate * duration);
   const buf    = getAudioCtx().createBuffer(1, frames, getAudioCtx().sampleRate);
   const data   = buf.getChannelData(0);
+
   for (let i = 0; i < frames; i++) data[i] = Math.random() * 2 - 1;
+
+  noiseCache.set(key, buf);
   return buf;
 }
 
@@ -545,9 +553,9 @@ function sndFootstep(fast) {
 const SCREEN_W = 1280; const SCREEN_H = 740;
 let MAP_W = 20; let MAP_H = 20;
 const FOV = Math.PI / 3 * 1.2; const HALF_FOV = FOV / 2;
-const NUM_RAYS = 550; const MAX_DEPTH = 20; const WALL_SCALE = 1.0;
+const NUM_RAYS = 480; const MAX_DEPTH = 20; const WALL_SCALE = 1.0;
 
-// --- [최적화 6단계] 550개 광선의 상대 각도 삼각함수 값을 미리 계산 (Lookup Table) ---
+// --- [최적화 6단계] 480개 광선의 상대 각도 삼각함수 값을 미리 계산 (Lookup Table) ---
 const RAY_ANGLES = new Float32Array(NUM_RAYS);
 const RAY_COS = new Float32Array(NUM_RAYS);
 const RAY_SIN = new Float32Array(NUM_RAYS);
@@ -580,7 +588,7 @@ function applyStageScale(stage) {
   MAP_W = Math.min(48, 20 + s * 2); 
   MAP_H = Math.min(48, 20 + s * 2);
   
-  ENEMY_COUNT = 8 + s * 1; 
+  ENEMY_COUNT = Math.min(18, 8 + Math.floor(s * 0.7)); 
 }
 let currentMap = [];
 let currentRooms = []; // 방 중심 좌표 목록 — 텔레포트용
@@ -1158,6 +1166,32 @@ let dashCooldown = 0; let dashActive = 0; let dashVX = 0; let dashVY = 0; let sc
 const DASH_DURATION = 0.13; const DASH_SPEED = 14; const DASH_COOLDOWN = 0.8; const DASH_RADIUS = 0.238;
 let emptyClickCount = 0; let emptyClickTimer = 0; let footstepTimer = 0;
 let screenParticles = [];
+
+//---/// 후반부 Edge 최적화용 상한선 ///---
+const PERF_CAP_PARTICLES = 250;
+const PERF_CAP_SCREEN_PARTICLES = 80;
+const PERF_CAP_SOUL_FX = 60;
+const PERF_CAP_EXPLOSION_FX = 24;
+const PERF_CAP_ENEMY_BULLETS = 80;
+const PERF_CAP_BOSS_AOES = 16;
+
+//---/// 배열 상한 푸시 헬퍼 ///---
+function cappedPush(arr, max, item) {
+  if (arr.length >= max) return false;
+  arr.push(item);
+  return true;
+}
+
+//---/// 몬스터 발소리 글로벌 쿨다운 + 거리 제한 ///---
+let enemyFootstepGlobalCooldown = 0;
+function tryEnemyFootstep(enemy) {
+  if (enemyFootstepGlobalCooldown > 0) return false;
+  const dist = Math.hypot(enemy.x - player.x, enemy.y - player.y);
+  if (dist > 4.5) return false;
+  sndEnemyFootstep();
+  enemyFootstepGlobalCooldown = 0.08;
+  return true;
+}
 
 let portal = null;
 let portal2 = null;
@@ -1783,14 +1817,14 @@ function triggerDarkExplosion(cx, cy, _depth) {
   for (let i = 0; i < 30; i++) {
     const spd = 4 + Math.random() * 8;
     const ang = Math.random() * Math.PI * 2;
-    particles.push({ 
+    cappedPush(particles, PERF_CAP_PARTICLES, { 
       x: cx, y: cy, 
       vx: Math.cos(ang) * spd, vy: Math.sin(ang) * spd, 
       life: 0.5 + Math.random() * 0.4, 
       color: Math.random() < 0.4 ? '#a0f' : (Math.random() < 0.5 ? '#d8f' : '#ff3366')
     });
   }
-  explosionFX.push({ x: cx, y: cy, r: 0, maxR: 5.5, life: 1.0, color: 'rgba(180,0,255,' });
+  cappedPush(explosionFX, PERF_CAP_EXPLOSION_FX, { x: cx, y: cy, r: 0, maxR: 5.5, life: 1.0, color: 'rgba(180,0,255,' });
   sndShoot('explosion'); // <--- 괄호 안 수정
   
   const EXP_RADIUS = 5; const EXP_DMG = 60;
@@ -1810,7 +1844,7 @@ function triggerDarkExplosion(cx, cy, _depth) {
       en.frozenTimer = 0;
       for (let i = 0; i < 12; i++) {
         const ang = Math.random() * Math.PI * 2;
-        particles.push({ x: en.x, y: en.y, vx: Math.cos(ang)*4, vy: Math.sin(ang)*4,
+        cappedPush(particles, PERF_CAP_PARTICLES, { x: en.x, y: en.y, vx: Math.cos(ang)*4, vy: Math.sin(ang)*4,
           life: 0.35 + Math.random()*0.2, color: Math.random() < 0.5 ? '#88eeff' : '#ffffff' });
       }
     }
@@ -1860,7 +1894,7 @@ function applyDamage(en, dmg, isExplosion = false, isPlayerAttack = false) {
       if (!isWall(bx, by)) {
         for (let i = 0; i < 6; i++) {
           const ba = Math.random() * Math.PI * 2;
-          particles.push({ x: en.x, y: en.y, vx: Math.cos(ba)*3, vy: Math.sin(ba)*3, life: 0.25, color: '#6600cc' });
+          cappedPush(particles, PERF_CAP_PARTICLES, { x: en.x, y: en.y, vx: Math.cos(ba)*3, vy: Math.sin(ba)*3, life: 0.25, color: '#6600cc' });
         }
         en.x = bx; en.y = by;
         en._invulnFrame = 0.5;
@@ -1886,7 +1920,7 @@ function applyDamage(en, dmg, isExplosion = false, isPlayerAttack = false) {
       en._enraged = true;
       for (let i = 0; i < 16; i++) {
         const a2 = Math.random() * Math.PI * 2;
-        particles.push({ x: en.x, y: en.y, vx: Math.cos(a2)*5, vy: Math.sin(a2)*5, life: 0.5+Math.random()*0.3, color: '#ff4400' });
+        cappedPush(particles, PERF_CAP_PARTICLES, { x: en.x, y: en.y, vx: Math.cos(a2)*5, vy: Math.sin(a2)*5, life: 0.5+Math.random()*0.3, color: '#ff4400' });
       }
     }
     return; // 아머가 피해를 완전 흡수
@@ -1966,7 +2000,7 @@ function triggerBossRegen(en) {
   for (let i = 0; i < 60; i++) {
     const ang = Math.random() * Math.PI * 2;
     const spd = 5.0 + Math.random() * 10.0;
-    particles.push({ x: en.x, y: en.y, vx: Math.cos(ang)*spd, vy: Math.sin(ang)*spd,
+    cappedPush(particles, PERF_CAP_PARTICLES, { x: en.x, y: en.y, vx: Math.cos(ang)*spd, vy: Math.sin(ang)*spd,
       life: 0.5 + Math.random()*0.8, color: Math.random() < 0.3 ? '#ffcc00' : '#ff2200' });
   }
 
@@ -2028,7 +2062,7 @@ function handleEnemyKill(en) {
         enemies.push(new Enemy(sx, sy));
         for (let i = 0; i < 6; i++) {
           const a2 = Math.random() * Math.PI * 2;
-          particles.push({ x: sx, y: sy, vx: Math.cos(a2)*3, vy: Math.sin(a2)*3, life: 0.4, color: '#cc4400' });
+          cappedPush(particles, PERF_CAP_PARTICLES, { x: sx, y: sy, vx: Math.cos(a2)*3, vy: Math.sin(a2)*3, life: 0.4, color: '#cc4400' });
         }
         spawned++;
       }
@@ -2057,11 +2091,11 @@ function handleEnemyKill(en) {
      expGain = Math.floor(expGain * (1 + 0.05 * gun.dmOffering));
       
       // 1. 기존 영혼 기둥 생성
-      soulFX.push({ x: en.x, y: en.y, life: 0.8, maxLife: 0.8, en });
+      cappedPush(soulFX, PERF_CAP_SOUL_FX, { x: en.x, y: en.y, life: 0.8, maxLife: 0.8, en });
     
       // 2. [NEW] "펑" 터지는 붉은 섬광 이펙트 (지속 시간 0.6 -> 1.2로 2배 연장)
       if (typeof explosionFX !== 'undefined') {
-        explosionFX.push({ x: en.x, y: en.y, r: 0, maxR: 3.5, life: 1.2, color: 'rgba(255,60,0,' });
+        cappedPush(explosionFX, PERF_CAP_EXPLOSION_FX, { x: en.x, y: en.y, r: 0, maxR: 3.5, life: 1.2, color: 'rgba(255,60,0,' });
       }
 
       // 3. 사방으로 강하게 흩뿌려지는 화염 파티클 (수명 연장)
@@ -2074,7 +2108,7 @@ function handleEnemyKill(en) {
         const vy = Math.sin(ang) * spd; 
         
         const colors = ['#ff3300', '#ff8800', '#aa0000', '#330000'];
-        particles.push({ 
+        cappedPush(particles, PERF_CAP_PARTICLES, { 
           x: en.x, y: en.y, 
           vx: vx, vy: vy, 
           // 파티클의 수명을 기존(0.2~0.5초)에서 (0.6~1.1초)로 대폭 늘림
@@ -2277,7 +2311,7 @@ function tryShoot() {
       const spd = 2.5 + Math.random() * 5;
       const ang = Math.random() * Math.PI * 2;
       const cols = ['#ff8800', '#ffaa00', '#ff4400'];
-      particles.push({ 
+      cappedPush(particles, PERF_CAP_PARTICLES, { 
         x: cx, y: cy, 
         vx: Math.cos(ang) * spd, vy: Math.sin(ang) * spd, 
         life: 0.4 + Math.random() * 0.3, 
@@ -2286,7 +2320,7 @@ function tryShoot() {
     }
     
     //---/// 폭발 범위 이펙트 스폰: 주황/노랑 계열 ///---
-    explosionFX.push({ x: cx, y: cy, r: 0, maxR: gun.EXPLODE_RADIUS, life: 1.0, color: 'rgba(255,140,0,' });
+    cappedPush(explosionFX, PERF_CAP_EXPLOSION_FX, { x: cx, y: cy, r: 0, maxR: gun.EXPLODE_RADIUS, life: 1.0, color: 'rgba(255,140,0,' });
     
     enemies.forEach(en => {
       if (!en.active || en.hp <= 0 || en === skipEn) return;
@@ -2562,11 +2596,11 @@ function tryMelee() {
 
 function spawnBlood(x, y, count) {
   //---/// 파티클 최대 개수 캡 — 초과 시 생성 억제 (불똥 제외) ///---
-  if (particles.length > 200) return;
+  if (particles.length >= PERF_CAP_PARTICLES) return;
   const cap = Math.min(count, 3);
   for (let i = 0; i < cap; i++) {
     // [최적화] 매번 새로 생성({})하지 않고 재활용 창고(Pool)에서 꺼내 씁니다.
-    particles.push(ParticlePool.get(x, y, (Math.random()-0.5)*2, (Math.random()-0.5)*2, 0.35+Math.random()*0.25, '#a00'));
+    cappedPush(particles, PERF_CAP_PARTICLES, ParticlePool.get(x, y, (Math.random()-0.5)*2, (Math.random()-0.5)*2, 0.35+Math.random()*0.25, '#a00'));
   }
 }
 
@@ -2624,6 +2658,7 @@ function movePlayer(dt) {
     if (!isWall(player.x + PR, ny + Math.sign(my) * PR) && !isWall(player.x - PR, ny + Math.sign(my) * PR)) player.y = ny;
   }
   dashCooldown = Math.max(0, dashCooldown - dt);
+  enemyFootstepGlobalCooldown = Math.max(0, enemyFootstepGlobalCooldown - dt);
   if (dashActive > 0) {
     dashActive = Math.max(0, dashActive - dt); const dashStep = DASH_SPEED * dt;
     const tx = player.x + dashVX * dashStep; const ty = player.y + dashVY * dashStep;
@@ -2720,7 +2755,7 @@ function updateEnemies(dt) {
         items.push(new Item(en.x, en.y, randomType));
         
         for (let i = 0; i < 6; i++) {
-          particles.push({ 
+          cappedPush(particles, PERF_CAP_PARTICLES, { 
             x: en.x, y: en.y, 
             vx: (Math.random()-0.5)*4, vy: (Math.random()-0.5)*4, 
             life: 0.5+Math.random()*0.3, color: '#a0f' 
@@ -2763,7 +2798,7 @@ function updateEnemies(dt) {
         const ang = -Math.PI * 0.5 + (Math.random() - 0.5) * 1.2;
         const spd = 1.5 + Math.random() * 2.5;
         const col = Math.random() < 0.5 ? '#ff4400' : '#ff8800';
-        particles.push({ x: en.x + (Math.random()-0.5)*0.3, y: en.y - 0.2,
+        cappedPush(particles, PERF_CAP_PARTICLES, { x: en.x + (Math.random()-0.5)*0.3, y: en.y - 0.2,
           vx: Math.cos(ang)*spd*0.3, vy: Math.sin(ang)*spd - 1.5,
           life: 0.18 + Math.random()*0.14, color: col });
       }
@@ -2779,7 +2814,7 @@ function updateEnemies(dt) {
             const ang = -Math.PI * 0.5 + (Math.random() - 0.5) * 1.6;
             const spd = 2.0 + Math.random() * 3.5;
             const col = Math.random() < 0.6 ? '#ff3300' : '#ffaa00';
-            particles.push({ x: en.x + (Math.random()-0.5)*0.2, y: en.y,
+            cappedPush(particles, PERF_CAP_PARTICLES, { x: en.x + (Math.random()-0.5)*0.2, y: en.y,
               vx: Math.cos(ang)*spd*0.35, vy: Math.sin(ang)*spd - 1.8,
               life: 0.22 + Math.random()*0.18, color: col });
           }
@@ -2829,7 +2864,7 @@ function updateEnemies(dt) {
             ? (Math.random() < 0.5 ? 1 : -1) * (0.55 + Math.random() * 0.4)
             : (Math.random() - 0.5) * 0.35;
           const firstAng = ang + missOffset;
-          enemyBullets.push({ x: en.x, y: en.y, vx: Math.cos(firstAng)*4.5, vy: Math.sin(firstAng)*4.5, life: 3.0, shooter: en });
+          cappedPush(enemyBullets, PERF_CAP_ENEMY_BULLETS, { x: en.x, y: en.y, vx: Math.cos(firstAng)*4.5, vy: Math.sin(firstAng)*4.5, life: 3.0, shooter: en });
           //---/// 선제사격 후 주기사격 쿨타임을 충분히 설정해 연발 방지 ///---
           en.attackCooldown = 2.2 + Math.random() * 1.2;
         }
@@ -2867,7 +2902,7 @@ function updateEnemies(dt) {
                 en._burstTimer = 0.15;
                 en._burstCount--;
                 const bAmt = (Math.random() - 0.5) * 0.08;
-                enemyBullets.push({ x: en.x, y: en.y, vx: Math.cos(ang + bAmt)*5.5, vy: Math.sin(ang + bAmt)*5.5, life: 4.0, shooter: en });
+                cappedPush(enemyBullets, PERF_CAP_ENEMY_BULLETS, { x: en.x, y: en.y, vx: Math.cos(ang + bAmt)*5.5, vy: Math.sin(ang + bAmt)*5.5, life: 4.0, shooter: en });
               }
             }
           }
@@ -2882,14 +2917,14 @@ function updateEnemies(dt) {
               en._burstCount = 2; // 이번 발 + 2발 더 = 총 3발
               en._burstTimer = 0.15;
               const bAmt = atIdealRange ? (Math.random()-0.5)*0.12 : (Math.random()-0.5)*0.25;
-              enemyBullets.push({ x: en.x, y: en.y, vx: Math.cos(ang + bAmt)*5.5, vy: Math.sin(ang + bAmt)*5.5, life: 4.0, shooter: en });
+              cappedPush(enemyBullets, PERF_CAP_ENEMY_BULLETS, { x: en.x, y: en.y, vx: Math.cos(ang + bAmt)*5.5, vy: Math.sin(ang + bAmt)*5.5, life: 4.0, shooter: en });
             } else {
               //---/// 기존 Shooter 발사 ///---
               const missAmt = atIdealRange
                 ? (Math.random() - 0.5) * 0.35
                 : (Math.random() < 0.5 ? 1 : -1) * (0.6 + Math.random() * 0.45);
               const shootAng = ang + missAmt;
-              enemyBullets.push({ x: en.x, y: en.y, vx: Math.cos(shootAng)*4.5, vy: Math.sin(shootAng)*4.5, life: 3.0, shooter: en });
+              cappedPush(enemyBullets, PERF_CAP_ENEMY_BULLETS, { x: en.x, y: en.y, vx: Math.cos(shootAng)*4.5, vy: Math.sin(shootAng)*4.5, life: 3.0, shooter: en });
             }
           }
         } else {
@@ -2950,7 +2985,7 @@ function updateEnemies(dt) {
             if (!isWall(nx + Math.sign(tdx) * BOSS_R, en.y)) en.x = nx;
             if (!isWall(en.x, ny + Math.sign(tdy) * BOSS_R)) en.y = ny;
             
-            if (Math.random() < dt * 15) particles.push({ x: en.x, y: en.y, vx: 0, vy: 0, life: 0.4, color: '#aa0000' });
+            if (Math.random() < dt * 15) cappedPush(particles, PERF_CAP_PARTICLES, { x: en.x, y: en.y, vx: 0, vy: 0, life: 0.4, color: '#aa0000' });
           } 
           
           if (tdist <= 1.5 || en._retreatTimer > 3.0) {
@@ -3000,7 +3035,7 @@ function updateEnemies(dt) {
             
             for(let i=0; i<8; i++) {
               const ang = Math.random() * Math.PI * 2;
-              particles.push({ x: spawnX, y: spawnY, vx: Math.cos(ang)*4, vy: Math.sin(ang)*4, life: 0.5, color: '#ff0000' });
+              cappedPush(particles, PERF_CAP_PARTICLES, { x: spawnX, y: spawnY, vx: Math.cos(ang)*4, vy: Math.sin(ang)*4, life: 0.5, color: '#ff0000' });
             }
           }
           
@@ -3035,7 +3070,7 @@ function updateEnemies(dt) {
           
           if (Math.random() < dt * 8) {
             const ang2 = Math.random() * Math.PI * 2;
-            particles.push({ x: en.x + Math.cos(ang2)*0.4, y: en.y + Math.sin(ang2)*0.4, vx: Math.cos(ang2)*0.3, vy: Math.sin(ang2)*0.3 - 0.5, life: 0.5 + Math.random()*0.3, color: Math.random() < 0.5 ? '#ff4444' : '#aa0000' });
+            cappedPush(particles, PERF_CAP_PARTICLES, { x: en.x + Math.cos(ang2)*0.4, y: en.y + Math.sin(ang2)*0.4, vx: Math.cos(ang2)*0.3, vy: Math.sin(ang2)*0.3 - 0.5, life: 0.5 + Math.random()*0.3, color: Math.random() < 0.5 ? '#ff4444' : '#aa0000' });
           }
         }
         
@@ -3134,7 +3169,7 @@ function updateEnemies(dt) {
         if (en.castType === 'slash') {
           // [NEW] 미리 계산해둔 경로(en.slashAngles)를 따라 검기 발사
           en.slashAngles.forEach(a => {
-            enemyBullets.push({ x: en.x, y: en.y, vx: Math.cos(a) * 7.0, vy: Math.sin(a) * 7.0, life: 2.0, shooter: en, isSlash: true, angle: a });
+            cappedPush(enemyBullets, PERF_CAP_ENEMY_BULLETS, { x: en.x, y: en.y, vx: Math.cos(a) * 7.0, vy: Math.sin(a) * 7.0, life: 2.0, shooter: en, isSlash: true, angle: a });
           });
         } else if (en.castType === 'aoe') {
           // 장판 생성
@@ -3143,7 +3178,7 @@ function updateEnemies(dt) {
             const ox = i === 0 ? 0 : (Math.random() - 0.5) * 8; // 퍼지는 범위 증가
             const oy = i === 0 ? 0 : (Math.random() - 0.5) * 8;
             // 반경(r)을 4.5로 대폭 증가
-            bossAoes.push({ x: player.x + ox, y: player.y + oy, life: 2.0, maxLife: 2.0, r: 4.5, triggered: false });
+            cappedPush(bossAoes, PERF_CAP_BOSS_AOES, { x: player.x + ox, y: player.y + oy, life: 2.0, maxLife: 2.0, r: 4.5, triggered: false });
           }
         }
         en.castType = null;
@@ -3160,7 +3195,7 @@ function updateEnemies(dt) {
         en._enraged = true;
         for (let i = 0; i < 12; i++) {
           const a2 = Math.random() * Math.PI * 2;
-          particles.push({ x: en.x, y: en.y, vx: Math.cos(a2)*4, vy: Math.sin(a2)*4, life: 0.4, color: '#ff2200' });
+          cappedPush(particles, PERF_CAP_PARTICLES, { x: en.x, y: en.y, vx: Math.cos(a2)*4, vy: Math.sin(a2)*4, life: 0.4, color: '#ff2200' });
         }
       }
 
@@ -3183,7 +3218,7 @@ function updateEnemies(dt) {
         }
         // 경고 중 파티클
         if (Math.random() < dt * 20) {
-          particles.push({ x: en.x + (Math.random()-0.5)*0.4, y: en.y + (Math.random()-0.5)*0.4,
+          cappedPush(particles, PERF_CAP_PARTICLES, { x: en.x + (Math.random()-0.5)*0.4, y: en.y + (Math.random()-0.5)*0.4,
             vx: 0, vy: -1.5, life: 0.25, color: '#ffcc00' });
         }
       }
@@ -3278,7 +3313,7 @@ function updateEnemies(dt) {
       en._trailTimer = (en._trailTimer || 0) - dt;
       if (en._trailTimer <= 0 && en.state === 'chase') {
         en._trailTimer = 0.06;
-        particles.push({ x: en.x, y: en.y, vx: 0, vy: 0, life: 0.18, color: 'rgba(100,0,200,0.6)' });
+        cappedPush(particles, PERF_CAP_PARTICLES, { x: en.x, y: en.y, vx: 0, vy: 0, life: 0.18, color: 'rgba(100,0,200,0.6)' });
       }
 
       // 조준선 체크 → 블링크
@@ -3290,7 +3325,7 @@ function updateEnemies(dt) {
           const bx2 = en.x + (Math.random() - 0.5) * 6;
           const by2 = en.y + (Math.random() - 0.5) * 6;
           if (!isWall(bx2, by2) && Math.hypot(bx2 - player.x, by2 - player.y) > 2.0) {
-            for (let i = 0; i < 8; i++) { const ba = Math.random()*Math.PI*2; particles.push({ x: en.x, y: en.y, vx: Math.cos(ba)*3, vy: Math.sin(ba)*3, life: 0.2, color: '#6600cc' }); }
+            for (let i = 0; i < 8; i++) { const ba = Math.random()*Math.PI*2; cappedPush(particles, PERF_CAP_PARTICLES, { x: en.x, y: en.y, vx: Math.cos(ba)*3, vy: Math.sin(ba)*3, life: 0.2, color: '#6600cc' }); }
             en.x = bx2; en.y = by2;
             en._blinkTimer = 1.2;
             break;
@@ -3364,7 +3399,7 @@ function updateEnemies(dt) {
           for (let i = 0; i < 20; i++) {
             const sa = Math.random() * Math.PI * 2;
             const sd = Math.random() * 3;
-            particles.push({ x: en.x + Math.cos(sa)*sd, y: en.y + Math.sin(sa)*sd,
+            cappedPush(particles, PERF_CAP_PARTICLES, { x: en.x + Math.cos(sa)*sd, y: en.y + Math.sin(sa)*sd,
               vx: Math.cos(sa)*4, vy: Math.sin(sa)*4, life: 0.4, color: '#ffcc00' });
           }
           sndEnemyHit(); // 외침 사운드 대용
@@ -3462,11 +3497,11 @@ function updateEnemies(dt) {
       if (!isWall(en.x + ENEMY_RADIUS, ny + Math.sign(moveY) * ENEMY_RADIUS) && !isWall(en.x - ENEMY_RADIUS, ny + Math.sign(moveY) * ENEMY_RADIUS)) en.y = ny;
       else if (en.state === 'patrol') en.patrolTarget = null;
     }
-    //---/// 몬스터 발소리 — 이동 중이고 플레이어와 가까울 때만 재생 ///---
-    if ((moveX !== 0 || moveY !== 0) && dist < 14) {
+    //---/// 몬스터 발소리 — 가까운 적만, 글로벌 쿨다운 공유 ///---
+    if ((moveX !== 0 || moveY !== 0) && dist < 4.5) {
       en.stepTimer = (en.stepTimer || 0) - dt;
       if (en.stepTimer <= 0) {
-        sndEnemyFootstep();
+        tryEnemyFootstep(en);
         en.stepTimer = en.state === 'chase' ? 0.36 : 0.55;
       }
     }
@@ -3603,7 +3638,7 @@ function updateBossAoes(dt) {
       for(let j=0; j<20; j++) {
          const ang = Math.random() * Math.PI * 2;
          const spd = 3 + Math.random() * 5;
-         particles.push({ x: a.x, y: a.y, vx: Math.cos(ang)*spd, vy: Math.sin(ang)*spd, life: 0.3+Math.random()*0.3, color: Math.random()<0.5?'#ff0000':'#880000' });
+         cappedPush(particles, PERF_CAP_PARTICLES, { x: a.x, y: a.y, vx: Math.cos(ang)*spd, vy: Math.sin(ang)*spd, life: 0.3+Math.random()*0.3, color: Math.random()<0.5?'#ff0000':'#880000' });
       }
     }
     if (a.life > 0) bossAoes[keepCount++] = a;
@@ -6054,7 +6089,7 @@ function spawnShootEffects(posType) {
   }
 
   // 1. 탄피 배출 (회전하며 포물선으로 떨어짐)
-  screenParticles.push({
+  cappedPush(screenParticles, PERF_CAP_SCREEN_PARTICLES, {
     x: startX + dirX * 30, y: startY + 40,
     vx: dirX * (180 + Math.random() * 120), 
     vy: -250 - Math.random() * 150,         
@@ -6065,7 +6100,7 @@ function spawnShootEffects(posType) {
 
   // 2. 총구 연기 (점점 퍼지며 사라짐)
   for(let i = 0; i < 4; i++) {
-    screenParticles.push({
+    cappedPush(screenParticles, PERF_CAP_SCREEN_PARTICLES, {
       x: startX + dirX * 10 + (Math.random()-0.5)*20, 
       y: startY - 20 + (Math.random()-0.5)*20,
       vx: dirX * (Math.random() - 0.5) * 60, 
