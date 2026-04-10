@@ -1237,243 +1237,325 @@ function initHUD() {
 // 전역 우클릭 방지 (캔버스뿐만 아니라 문서 전체)
 document.addEventListener('contextmenu', e => e.preventDefault());
 
-document.addEventListener('keydown', e => {
-  keys[e.code] = true;
-  if (e.code === 'Space' && state.running && !state.paused && !state.dead && !state.upgrading && document.pointerLockElement === canvas) tryDash();
-  if (e.code === 'KeyV' && state.running && !state.paused && !state.dead && !state.upgrading && document.pointerLockElement === canvas) {
-    currentWeapon = (currentWeapon === 'gun') ? 'mace' : 'gun';
-    markHUDDirty(); 
-  }
-  
-  if (e.code === 'KeyE' && state.running && !state.paused && !state.dead && !state.upgrading && document.pointerLockElement === canvas) {
-    if (state.fadeOut === 0) {
-      const p1near = portal  && portal.active  && Math.hypot(portal.x  - player.x, portal.y  - player.y) < 1.5;
-      const p2near = portal2 && portal2.active && Math.hypot(portal2.x - player.x, portal2.y - player.y) < 1.5;
-	  const merchant = _cachedMerchant && _cachedMerchant.active ? _cachedMerchant : null;
-      if (merchant && Math.hypot(merchant.x - player.x, merchant.y - player.y) < 2.0) {
-        const cost = 2500; // 업그레이드 구매 비용
-        if (state.score >= cost) {
-          state.score -= cost;
-          // 거래 완료 대사 출력 후 즉시 업그레이드 창 팝업!
-          merchant.dialogueText = "A WISE BARGAIN...";
-          merchant.dialogueTimer = 3.0;
-          markHUDDirty();
-          showUpgradeUI(() => { canvas.requestPointerLock(); });
-        } else {
-          merchant.dialogueText = "NOT ENOUGH SOULS (2500 SCORE).";
-          merchant.dialogueTimer = 2.0;
-        }
-        return; // 상인과 상호작용 시 포탈 탑승 로직은 건너뜀
-      }
-      if (p1near || p2near) {
-        //---/// [NEW] 포탈 탑승 시 맵에 남은 모든 아이템 즉시 자동 획득 ///---
-        items.forEach(it => {
-          if (!it.active) return;
-          it.active = false;
-          if (it.type === 'health') {
-            if (state.health >= 100) state.score += 150;
-            else state.health = Math.min(100, state.health + 25);
-            state.score += 25;
-          } else if (it.type === 'armor') {
-            if (state.armor >= state.maxArmor) state.score += 120;
-            else state.armor = Math.min(state.maxArmor, state.armor + 25);
-            state.score += 20;
-          } else if (it.type === 'ammo') { 
-            gun.mags = Math.min(gun.mags + 1, 9); 
-            state.score += 15; 
-          }
-          state.exp += Math.floor(state.maxExp * 0.01);
-        });
-        
-        // 아이템 다중 획득으로 인한 연속 레벨업 처리
-        while (state.exp >= state.maxExp) {
-          state.level++; state.exp -= state.maxExp;
-          state.maxExp = Math.floor(state.maxExp * 1.3);
-          applyLevelUpBonus();
-          state.pendingUpgrades++;
-        }
-        markHUDDirty(); // 화면에 즉시 반영
-        
-        state.fadeOut = 0.8; // 다음 스테이지로 페이드 아웃 시작
-      }
+let mouseLeftDown = false;
+let _shouldRestorePointerLockAfterUpgrade = false;
+
+function isPointerLocked() {
+  return document.pointerLockElement === canvas;
+}
+
+function canAcceptGameplayInput() {
+  return state.running && !state.paused && !state.dead && !state.upgrading && isPointerLocked();
+}
+
+function requestGameplayPointerLock() {
+  if (state.running && !state.upgrading && !isPointerLocked()) canvas.requestPointerLock();
+}
+
+function getNearbyMerchant() {
+  const merchant = _cachedMerchant && _cachedMerchant.active ? _cachedMerchant : null;
+  if (!merchant) return null;
+  return Math.hypot(merchant.x - player.x, merchant.y - player.y) < 2.0 ? merchant : null;
+}
+
+function isNearActivePortal() {
+  const p1near = portal && portal.active && Math.hypot(portal.x - player.x, portal.y - player.y) < 1.5;
+  const p2near = portal2 && portal2.active && Math.hypot(portal2.x - player.x, portal2.y - player.y) < 1.5;
+  return !!(p1near || p2near);
+}
+
+function consumeRemainingItemsBeforeTransition() {
+  items.forEach(it => {
+    if (!it.active) return;
+    it.active = false;
+    if (it.type === 'health') {
+      if (state.health >= 100) state.score += 150;
+      else state.health = Math.min(100, state.health + 25);
+      state.score += 25;
+    } else if (it.type === 'armor') {
+      if (state.armor >= state.maxArmor) state.score += 120;
+      else state.armor = Math.min(state.maxArmor, state.armor + 25);
+      state.score += 20;
+    } else if (it.type === 'ammo') {
+      gun.mags = Math.min(gun.mags + 1, 9);
+      state.score += 15;
     }
+    state.exp += Math.floor(state.maxExp * 0.01);
+  });
+
+  while (state.exp >= state.maxExp) {
+    state.level++;
+    state.exp -= state.maxExp;
+    state.maxExp = Math.floor(state.maxExp * 1.3);
+    applyLevelUpBonus();
+    state.pendingUpgrades++;
   }
 
-  //---/// Q키 디버그 — 모든 업그레이드 텍스트 오버레이 출력 + 선택 적용 ///---
-  if (e.code === 'KeyQ') {
-    const existing = document.getElementById('debug-upgrade-overlay');
-    if (existing) { existing.remove(); return; }
+  markHUDDirty();
+}
 
-    function buildDebugOverlay() {
-      const overlay = document.createElement('div');
-      overlay.id = 'debug-upgrade-overlay';
-      overlay.style.cssText = `
-        position:fixed; top:0; left:0; width:100%; height:100%; overflow-y:auto;
-        background:rgba(0,0,0,0.92); color:#ccc; font-family:'Share Tech Mono',monospace;
-        font-size:13px; z-index:9999; padding:20px; box-sizing:border-box;
-      `;
-      const groups = { normal:'#88aaff', caliber:'#ffcc44', darkmagic:'#cc66ff', magic:'#33aaff' };
-      let html = `<div style="color:#fff;font-size:18px;margin-bottom:16px;letter-spacing:3px">
-        DEBUG — 시스템 메뉴 <span style="color:#666;font-size:13px">[Q] 닫기 (또는 배경 클릭)</span>
-      </div>`;
-      
-      const shopStatus = state.forceShop ? '<span style="color:#4f4">다음 역 예약됨</span>' : '<span style="color:#f44">비활성화</span>';
+function interactWithNearbyObject() {
+  if (state.fadeOut !== 0) return false;
+
+  const merchant = getNearbyMerchant();
+  if (merchant) {
+    const cost = 2500;
+    if (state.score >= cost) {
+      state.score -= cost;
+      merchant.dialogueText = "A WISE BARGAIN...";
+      merchant.dialogueTimer = 3.0;
+      markHUDDirty();
+      showUpgradeUI();
+    } else {
+      merchant.dialogueText = "NOT ENOUGH SOULS (2500 SCORE).";
+      merchant.dialogueTimer = 2.0;
+    }
+    return true;
+  }
+
+  if (isNearActivePortal()) {
+    consumeRemainingItemsBeforeTransition();
+    state.fadeOut = 0.8;
+    return true;
+  }
+
+  return false;
+}
+
+function applyUpgradeSelection(up, options = {}) {
+  if (!up) return false;
+
+  state.upgrades[up.id] = UPG(up.id) + 1;
+  if (up.apply) up.apply();
+  if (up.gun) gun.DMG_BASE = Math.round(gun.DMG_BASE * 1.01 * 100) / 100;
+
+  if (options.markHud !== false) markHUDDirty();
+  return true;
+}
+
+function toggleDebugUpgradeOverlay() {
+  const existing = document.getElementById('debug-upgrade-overlay');
+  if (existing) {
+    existing.remove();
+    return;
+  }
+
+  function buildDebugOverlay() {
+    const overlay = document.createElement('div');
+    overlay.id = 'debug-upgrade-overlay';
+    overlay.style.cssText = `
+      position:fixed; top:0; left:0; width:100%; height:100%; overflow-y:auto;
+      background:rgba(0,0,0,0.92); color:#ccc; font-family:'Share Tech Mono',monospace;
+      font-size:13px; z-index:9999; padding:20px; box-sizing:border-box;
+    `;
+    const groups = { normal:'#88aaff', caliber:'#ffcc44', darkmagic:'#cc66ff', magic:'#33aaff' };
+    let html = `<div style="color:#fff;font-size:18px;margin-bottom:16px;letter-spacing:3px">
+      DEBUG — 시스템 메뉴 <span style="color:#666;font-size:13px">[Q] 닫기 (또는 배경 클릭)</span>
+    </div>`;
+
+    const shopStatus = state.forceShop ? '<span style="color:#4f4">다음 역 예약됨</span>' : '<span style="color:#f44">비활성화</span>';
+    html += `
+      <div data-debug-action="force-shop"
+           onmouseenter="this.style.background='#222'" onmouseleave="this.style.background='#111'"
+           style="margin-bottom:16px;padding:12px 14px;background:#111;border-left:3px solid #00ffcc;cursor:pointer;transition:background 0.1s;">
+        <div style="margin-bottom:2px"><b style="color:#0fc">다음 역은 상점입니다</b></div>
+        <div style="color:#aaa;font-size:12px;">클릭 시 다음 스테이지 진입 시 무조건 상점 맵이 생성됩니다. (1회용)</div>
+        <div style="color:#666;font-size:11px;margin-top:4px;">현재 상태: ${shopStatus}</div>
+      </div>
+    `;
+
+    let lastGroup = null;
+    UPGRADES.forEach(u => {
+      if (u.group !== lastGroup) {
+        const gc = groups[u.group] || '#aaa';
+        html += `<div style="color:${gc};font-size:12px;letter-spacing:3px;margin:18px 0 8px;border-bottom:1px solid ${gc}44;padding-bottom:4px">${u.group.toUpperCase()}</div>`;
+        lastGroup = u.group;
+      }
+      const cond = u.condition ? (u.condition() ? '<span style="color:#4f4">해금</span>' : '<span style="color:#f44">잠김</span>') : '<span style="color:#888">항상</span>';
+      const gunTag = u.gun ? '<span style="color:#88f">[총기]</span> ' : '';
       html += `
-        <div data-debug-action="force-shop" 
+        <div data-uid="${u.id}"
              onmouseenter="this.style.background='#222'" onmouseleave="this.style.background='#111'"
-             style="margin-bottom:16px;padding:12px 14px;background:#111;border-left:3px solid #00ffcc;cursor:pointer;transition:background 0.1s;">
-          <div style="margin-bottom:2px"><b style="color:#0fc">다음 역은 상점입니다</b></div>
-          <div style="color:#aaa;font-size:12px;">클릭 시 다음 스테이지 진입 시 무조건 상점 맵이 생성됩니다. (1회용)</div>
-          <div style="color:#666;font-size:11px;margin-top:4px;">현재 상태: ${shopStatus}</div>
-        </div>
-      `;
-      let lastGroup = null;
-      UPGRADES.forEach(u => {
-        if (u.group !== lastGroup) {
-          const gc = groups[u.group] || '#aaa';
-          html += `<div style="color:${gc};font-size:12px;letter-spacing:3px;margin:18px 0 8px;border-bottom:1px solid ${gc}44;padding-bottom:4px">${u.group.toUpperCase()}</div>`;
-          lastGroup = u.group;
-        }
-        const cond = u.condition ? (u.condition() ? '<span style="color:#4f4">해금</span>' : '<span style="color:#f44">잠김</span>') : '<span style="color:#888">항상</span>';
-        const gunTag = u.gun ? '<span style="color:#88f">[총기]</span> ' : '';
-        
-        //---/// 적용 버튼을 지우고, 칸 전체에 data-uid 및 hover 스타일을 부여 ///---
-        html += `
-          <div data-uid="${u.id}" 
-               onmouseenter="this.style.background='#222'" onmouseleave="this.style.background='#111'"
-               style="margin-bottom:12px;padding:8px 10px;background:#111;border-left:3px solid ${groups[u.group]||'#555'};cursor:pointer;transition:background 0.1s;">
-            <div style="margin-bottom:2px">${gunTag}<b style="color:#fff">${u.name}</b> <span style="color:#555;font-size:11px">${u.id}</span> ${cond}</div>
-            <div style="color:#aaa;font-size:12px;margin-bottom:4px">${u.short || ''}</div>
-            <div style="color:#666;font-size:11px;line-height:1.6;border-top:1px solid #222;padding-top:4px">${u.desc()}</div>
-          </div>`;
-      });
-      html += `<div style="margin-top:20px;color:#555;font-size:11px">* desc()는 현재 gun 상태 기준 / condition()은 현재 조건 기준</div>`;
-      overlay.innerHTML = html;
+             style="margin-bottom:12px;padding:8px 10px;background:#111;border-left:3px solid ${groups[u.group]||'#555'};cursor:pointer;transition:background 0.1s;">
+          <div style="margin-bottom:2px">${gunTag}<b style="color:#fff">${u.name}</b> <span style="color:#555;font-size:11px">${u.id}</span> ${cond}</div>
+          <div style="color:#aaa;font-size:12px;margin-bottom:4px">${u.short || ''}</div>
+          <div style="color:#666;font-size:11px;line-height:1.6;border-top:1px solid #222;padding-top:4px">${u.desc()}</div>
+        </div>`;
+    });
+    html += `<div style="margin-top:20px;color:#555;font-size:11px">* desc()는 현재 gun 상태 기준 / condition()은 현재 조건 기준</div>`;
+    overlay.innerHTML = html;
 
-
-      //---/// 클릭 이벤트 (칸 전체 클릭 적용) ///---
-      overlay.addEventListener('click', ev => {
-        // 1. 상점 강제 예약 버튼 클릭 처리
-        const actionRow = ev.target.closest('div[data-debug-action]');
-        if (actionRow && actionRow.dataset.debugAction === 'force-shop') {
-          ev.stopPropagation();
-          state.forceShop = !state.forceShop; // 상태 토글
-          
-          // UI 새로고침
-          const currentScroll = overlay.scrollTop;
-          overlay.remove();
-          const newOverlay = buildDebugOverlay();
-          document.body.appendChild(newOverlay);
-          newOverlay.scrollTop = currentScroll;
-          return;
-        }
-
-        // 2. 기존 업그레이드 클릭 처리
-        const row = ev.target.closest('div[data-uid]');
-        
-        // 배경(row 바깥)을 클릭했다면 창 닫기
-        if (!row) { overlay.remove(); return; } 
+    overlay.addEventListener('click', ev => {
+      const actionRow = ev.target.closest('div[data-debug-action]');
+      if (actionRow && actionRow.dataset.debugAction === 'force-shop') {
         ev.stopPropagation();
-        
-        const uid = row.dataset.uid;
-        const upg = UPGRADES.find(u => u.id === uid);
-        if (upg) { 
-          // 1. 디버그 창에서도 중앙 스택을 정상적으로 1 올려줍니다.
-          state.upgrades[upg.id] = UPG(upg.id) + 1;
-          
-          // 2. apply 함수가 있는 경우에만 실행하여 마법 클릭 시 에러 뿜는 현상 방지!
-          if (upg.apply) upg.apply(); 
-          
-          // 3. 총기류 선택 시 기본 데미지 1% 상승 (정상 UI와 동일하게 적용)
-          if (upg.gun) gun.DMG_BASE = Math.round(gun.DMG_BASE * 1.01 * 100) / 100;
-          
-          updateHUD(); 
-        }
-        
-        //---/// 현재 스크롤 위치 저장 ///---
+        state.forceShop = !state.forceShop;
         const currentScroll = overlay.scrollTop;
-        
-        //---/// 오버레이 재빌드 — desc/cond 갱신 ///---
         overlay.remove();
         const newOverlay = buildDebugOverlay();
         document.body.appendChild(newOverlay);
-        
-        //---/// 스크롤 위치 복구 ///---
         newOverlay.scrollTop = currentScroll;
-      });
+        return;
+      }
 
-      return overlay;
+      const row = ev.target.closest('div[data-uid]');
+      if (!row) {
+        overlay.remove();
+        return;
+      }
+      ev.stopPropagation();
+
+      const uid = row.dataset.uid;
+      const upg = UPGRADES.find(u => u.id === uid);
+      if (upg) {
+        applyUpgradeSelection(upg);
+        updateHUD();
+      }
+
+      const currentScroll = overlay.scrollTop;
+      overlay.remove();
+      const newOverlay = buildDebugOverlay();
+      document.body.appendChild(newOverlay);
+      newOverlay.scrollTop = currentScroll;
+    });
+
+    return overlay;
+  }
+
+  document.body.appendChild(buildDebugOverlay());
+  if (isPointerLocked()) document.exitPointerLock();
+}
+
+function handleKeyDown(e) {
+  keys[e.code] = true;
+
+  if (e.code === 'Enter' && state.dead && state.running) {
+    initGame();
+    BGM.start();
+    return;
+  }
+
+  if (e.code === 'KeyQ') {
+    toggleDebugUpgradeOverlay();
+    return;
+  }
+
+  if (e.code === 'KeyU') {
+    if (!state.running || state.dead || state.upgrading || state.paused) return;
+    if (state.pendingUpgrades > 0) {
+      state.pendingUpgrades--;
+      showUpgradeUI();
     }
-
-    document.body.appendChild(buildDebugOverlay());
-    if (document.pointerLockElement === canvas) document.exitPointerLock();
+    return;
   }
-});
-document.addEventListener('keyup', e => { keys[e.code] = false; });
 
-canvas.addEventListener('click', e => { 
-  if (!state.running || state.upgrading) return; 
-  if (document.pointerLockElement !== canvas) canvas.requestPointerLock(); 
-});
+  if (!canAcceptGameplayInput()) return;
 
-let mouseLeftDown = false;
-canvas.addEventListener('mousedown', e => {
-  if (!state.running || state.paused || state.upgrading || document.pointerLockElement !== canvas) return;
-  if (e.button === 0) { 
-    mouseLeftDown = true; 
-    // --- [NEW] 무기에 따른 공격 분기 ---
-    if (currentWeapon === 'mace') tryMaceSwing();
-    else tryShoot(); 
+  if (e.code === 'Space') {
+    tryDash();
+    return;
   }
-  if (e.button === 2) tryMelee();
-});
-canvas.addEventListener('mouseup', e => { if (e.button === 0) mouseLeftDown = false; });
-document.addEventListener('pointerlockchange', () => { if (!document.pointerLockElement) mouseLeftDown = false; });
 
-document.addEventListener('mousemove', e => { if (!state.running || state.paused || state.upgrading || document.pointerLockElement !== canvas) return; mouseDeltaX += e.movementX; });
+  if (e.code === 'KeyV') {
+    currentWeapon = (currentWeapon === 'gun') ? 'mace' : 'gun';
+    markHUDDirty();
+    return;
+  }
 
-document.addEventListener('pointerlockchange', () => {
-  const isLocked = document.pointerLockElement === canvas;
+  if (e.code === 'KeyE') {
+    interactWithNearbyObject();
+  }
+}
+
+function handleKeyUp(e) {
+  keys[e.code] = false;
+}
+
+function showPauseOverlay() {
   const hint = document.getElementById('lock-hint');
+  if (!hint) return;
+
+  hint.style.display = 'flex';
+  hint.style.pointerEvents = 'auto';
+  hint.onclick = e => {
+    if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'BUTTON') canvas.requestPointerLock();
+  };
+  hint.innerHTML = `
+    <div class="lh-main" style="font-size:32px; margin-bottom:10px;">GAME PAUSED</div>
+    <div class="lh-sub" style="margin-bottom:20px;">화면을 클릭하면 다시 시작합니다.</div>
+    <div style="color:#ccc; font-size:16px; text-align:center; line-height:2.2; background:rgba(0,0,0,0.6); padding:20px; border:1px solid #555;">
+      <b style="color:#fff">W / A / S / D</b> 이동 &nbsp;|&nbsp; <b style="color:#fff">마우스</b> 시점 전환<br>
+      <b style="color:#fff">좌클릭</b> 발사 &nbsp;|&nbsp; <b style="color:#fff">우클릭</b> 근접 공격<br>
+      <b style="color:#fff">SPACE</b> 대쉬 &nbsp;|&nbsp; <b style="color:#fff">SHIFT</b> 달리기 &nbsp;|&nbsp; <b style="color:#fff">R</b> 재장전<br>
+      <b style="color:#fff">E</b> 오브젝트 상호작용
+    </div>
+    <div class="sens-wrap" style="margin-top:22px;">
+      <label>마우스 민감도</label>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <input type="range" id="sens-slider-pause" min="1" max="20" step="1" value="${Math.round(MOUSE_SENSITIVITY / 0.0005)}">
+        <span class="sens-val" id="sens-val-pause">${Math.round(MOUSE_SENSITIVITY / 0.0005)}</span>
+      </div>
+    </div>
+    <div class="sens-wrap" style="margin-top:14px;">
+      <label>BGM 볼륨</label>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <input type="range" id="bgm-vol-slider" min="0" max="100" step="1" value="${Math.round(_bgmVol * 100)}">
+        <span class="sens-val" id="bgm-vol-val">${Math.round(_bgmVol * 100)}</span>
+        <button id="bgm-mute-btn" style="font-family:'Share Tech Mono',monospace;font-size:13px;background:transparent;border:1px solid #555;color:#ccc;padding:2px 10px;cursor:pointer;">${_bgmMuted ? 'UNMUTE' : 'MUTE'}</button>
+      </div>
+    </div>
+  `;
+}
+
+function hidePauseOverlay() {
+  const hint = document.getElementById('lock-hint');
+  if (!hint) return;
+  hint.style.display = 'none';
+  hint.style.pointerEvents = 'none';
+  hint.onclick = null;
+}
+
+function handlePointerLockChange() {
+  const isLocked = isPointerLocked();
+  if (!isLocked) mouseLeftDown = false;
 
   if (!isLocked && state.running && !state.dead && !state.upgrading) {
     state.paused = true;
-    if (hint) {
-      hint.style.display = 'flex';
-      hint.style.pointerEvents = 'auto';
-      //---/// 슬라이더 이외 영역 클릭 시 포인터 락 재진입 ///---
-      hint.onclick = e => { if (e.target.tagName !== 'INPUT') canvas.requestPointerLock(); };
-      hint.innerHTML = `
-        <div class="lh-main" style="font-size:32px; margin-bottom:10px;">GAME PAUSED</div>
-        <div class="lh-sub" style="margin-bottom:20px;">화면을 클릭하면 다시 시작합니다.</div>
-        <div style="color:#ccc; font-size:16px; text-align:center; line-height:2.2; background:rgba(0,0,0,0.6); padding:20px; border:1px solid #555;">
-          <b style="color:#fff">W / A / S / D</b> 이동 &nbsp;|&nbsp; <b style="color:#fff">마우스</b> 시점 전환<br>
-          <b style="color:#fff">좌클릭</b> 발사 &nbsp;|&nbsp; <b style="color:#fff">우클릭</b> 근접 공격<br>
-          <b style="color:#fff">SPACE</b> 대쉬 &nbsp;|&nbsp; <b style="color:#fff">SHIFT</b> 달리기 &nbsp;|&nbsp; <b style="color:#fff">R</b> 재장전<br>
-          <b style="color:#fff">E</b> 오브젝트 상호작용
-        </div>
-        <div class="sens-wrap" style="margin-top:22px;">
-          <label>마우스 민감도</label>
-          <div style="display:flex;align-items:center;gap:10px;">
-            <input type="range" id="sens-slider-pause" min="1" max="20" step="1" value="${Math.round(MOUSE_SENSITIVITY / 0.0005)}">
-            <span class="sens-val" id="sens-val-pause">${Math.round(MOUSE_SENSITIVITY / 0.0005)}</span>
-          </div>
-        </div>
-        <div class="sens-wrap" style="margin-top:14px;">
-          <label>BGM 볼륨</label>
-          <div style="display:flex;align-items:center;gap:10px;">
-            <input type="range" id="bgm-vol-slider" min="0" max="100" step="1" value="${Math.round(_bgmVol * 100)}">
-            <span class="sens-val" id="bgm-vol-val">${Math.round(_bgmVol * 100)}</span>
-            <button id="bgm-mute-btn" style="font-family:'Share Tech Mono',monospace;font-size:13px;background:transparent;border:1px solid #555;color:#ccc;padding:2px 10px;cursor:pointer;">${_bgmMuted ? 'UNMUTE' : 'MUTE'}</button>
-          </div>
-        </div>
-      `;
-    }
+    showPauseOverlay();
   } else {
     state.paused = false;
     lastTime = performance.now();
-    if (hint && isLocked) { hint.style.display = 'none'; hint.style.pointerEvents = 'none'; hint.onclick = null; }
+    hidePauseOverlay();
   }
+}
+
+document.addEventListener('keydown', handleKeyDown);
+document.addEventListener('keyup', handleKeyUp);
+
+document.addEventListener('pointerlockchange', handlePointerLockChange);
+
+document.addEventListener('mousemove', e => {
+  if (!canAcceptGameplayInput()) return;
+  mouseDeltaX += e.movementX;
+});
+
+canvas.addEventListener('click', () => {
+  if (!state.running || state.upgrading) return;
+  requestGameplayPointerLock();
+});
+
+canvas.addEventListener('mousedown', e => {
+  if (!canAcceptGameplayInput()) return;
+  if (e.button === 0) {
+    mouseLeftDown = true;
+    if (currentWeapon === 'mace') tryMaceSwing();
+    else tryShoot();
+  }
+  if (e.button === 2) tryMelee();
+});
+
+canvas.addEventListener('mouseup', e => {
+  if (e.button === 0) mouseLeftDown = false;
 });
 
 function isWall(x, y) {
@@ -1770,27 +1852,30 @@ function updateSoulFX(dt) {
 function updateHUD() {
   if (!HUD.initialized) initHUD(); // 최초 1회만 DOM 탐색
 
-  const hp = Math.max(0, state.health); 
+  const hp = Math.max(0, state.health);
   const arm = Math.max(0, state.armor);
-  
-  // 텍스트 업데이트
-  HUD.score.textContent = state.score;
-  HUD.stage.textContent = state.stage;
-  HUD.kills.textContent = state.kills;
-  HUD.damage.textContent = Math.round(state.totalDamage);
-  
+
+  if (HUD.score) HUD.score.textContent = state.score;
+  if (HUD.stage) HUD.stage.textContent = state.stage;
+  if (HUD.kills) HUD.kills.textContent = state.kills;
+  if (HUD.damage) HUD.damage.textContent = Math.round(state.totalDamage);
+
   const pendingCnt = state.pendingUpgrades || 0;
-  HUD.pending.style.display = pendingCnt > 0 ? 'block' : 'none';
-  HUD.pendingCount.textContent = pendingCnt;
-  
-  HUD.hpFill.style.width = hp + '%';
-  HUD.armFill.style.width = (arm / state.maxArmor * 100) + '%';
-  HUD.hpVal.textContent = hp;
-  HUD.armVal.textContent = arm;
+  if (HUD.pending) HUD.pending.style.display = pendingCnt > 0 ? 'block' : 'none';
+  if (HUD.pendingCount) HUD.pendingCount.textContent = pendingCnt;
+
+  if (HUD.hpFill) HUD.hpFill.style.width = hp + '%';
+  if (HUD.armFill) HUD.armFill.style.width = (arm / state.maxArmor * 100) + '%';
+  if (HUD.hpVal) HUD.hpVal.textContent = hp;
+  if (HUD.armVal) HUD.armVal.textContent = arm;
 
   const expPct = Math.min(100, (state.exp / state.maxExp) * 100);
-  HUD.expFill.style.width = expPct + '%';
-  HUD.expVal.textContent = 'LV ' + state.level;
+  if (HUD.expFill) HUD.expFill.style.width = expPct + '%';
+  if (HUD.expVal) HUD.expVal.textContent = 'LV ' + state.level;
+
+  if (HUD.bullets) HUD.bullets.textContent = gun.mag;
+  if (HUD.mags) HUD.mags.textContent = gun.mags;
+  if (HUD.reloadMsg) HUD.reloadMsg.style.display = gun.reloading ? 'block' : 'none';
 
 }
 // [최적화] HUD 더티 플래그 — 매 이벤트마다 DOM 접근 대신 게임 루프 끝에서 일괄 처리
@@ -5914,39 +5999,37 @@ const UPGRADES = [
 
 function showUpgradeUI(onDone) {
   let pool = UPGRADES.filter(u => {
-    // 특정 약실 중복 등장 방지
     if (gun.CALIBER === '12gauge' && u.id === 'caliber_12g') return false;
     if (gun.CALIBER === '20mm'    && u.id === 'caliber_20mm') return false;
     if (gun.CALIBER === '9mm'     && u.id === 'caliber_9mm') return false;
-    // [NEW] max 속성이 있고, 현재 스택이 그 최대치에 도달했다면 자동 제외
     if (u.max && UPG(u.id) >= u.max) return false;
-    // [NEW] 영웅본색 연계처럼 특수한 조건이 걸려있는 경우에만 개별 체크
-    if (u.condition && !u.condition()) return false; 
+    if (u.condition && !u.condition()) return false;
     return true;
   });
-  //---/// guaranteed 항목: 조건 충족 즉시 다음 업그레이드에 무조건 출현 ///---
+
   const guaranteed = pool.filter(u => u.guaranteed && u.guaranteed());
   const normal = pool.filter(u => !u.guaranteed || !u.guaranteed());
   const picks = [...guaranteed];
   const copy = [...normal];
   while (picks.length < 3 && copy.length > 0) picks.push(copy.splice(Math.floor(Math.random() * copy.length), 1)[0]);
-  const choicesEl = document.getElementById('upgrade-choices'); choicesEl.innerHTML = '';
-  // 버튼이 뜨자마자 눌리는 것을 방지하기 위해 잠깐 동안 pointer-events를 none으로 설정
-  choicesEl.style.pointerEvents = 'none';
+
+  const choicesEl = document.getElementById('upgrade-choices');
+  const overlayEl = document.getElementById('upgrade-overlay');
   const tooltip = document.getElementById('up-tooltip-global');
+  choicesEl.innerHTML = '';
+  choicesEl.style.pointerEvents = 'none';
+
   picks.forEach(up => {
     let btnClass = 'upgrade-btn';
     if (up.group === 'caliber') btnClass += ' caliber-btn';
-	if (up.group === 'magic') btnClass += ' magic-btn';
+    if (up.group === 'magic') btnClass += ' magic-btn';
     if (up.group === 'darkmagic') btnClass += ' darkmagic-btn';
-    
-    
-    // [NEW] 영웅본색과 건카타(cleric) 등장 시 금삐까 테마 적용!
     if (up.id === 'heroic_spirit' || up.id === 'cleric') btnClass += ' ultimate-btn';
 
-    const btn = document.createElement('button'); btn.className = btnClass;
+    const btn = document.createElement('button');
+    btn.className = btnClass;
     btn.innerHTML = `<span class="up-name">${up.name}</span><span class="up-short">${up.short || ''}</span>`;
-    //---/// 툴팁: 전역 div에 내용 주입 후 마우스 위치에 표시 ///---
+
     btn.addEventListener('mouseenter', () => {
       tooltip.innerHTML = up.desc();
       tooltip.style.display = 'block';
@@ -5954,38 +6037,31 @@ function showUpgradeUI(onDone) {
     btn.addEventListener('mousemove', ev => {
       const x = ev.clientX + 16, y = ev.clientY - 10;
       tooltip.style.left = Math.min(x, window.innerWidth - 300) + 'px';
-      tooltip.style.top  = Math.max(y, 4) + 'px';
+      tooltip.style.top = Math.max(y, 4) + 'px';
     });
     btn.addEventListener('mouseleave', () => {
       tooltip.style.display = 'none';
     });
     btn.addEventListener('click', () => {
       tooltip.style.display = 'none';
-      // [NEW] 클릭 즉시 중앙 스택 관리소에 1을 더해줍니다.
-      state.upgrades[up.id] = UPG(up.id) + 1;
-      // [NEW] 특수한 스탯 연산(데미지, 재장전 계산 등)이 필요한 경우에만 apply 실행
-      if (up.apply) up.apply();
-      //---/// 총기 관련 업그레이드 선택 시 베이스 공격력 1% 상승 ///---
-      if (up.gun) gun.DMG_BASE = Math.round(gun.DMG_BASE * 1.01 * 100) / 100;
-      document.getElementById('upgrade-overlay').style.display = 'none';
+      applyUpgradeSelection(up);
+      overlayEl.style.display = 'none';
       state.upgrading = false;
-      markHUDDirty();
+
       if (onDone) {
-        //---/// 체인 업그레이드: 다음 UI 먼저 띄우고, 완전히 끝난 뒤에만 캡처 ///---
         onDone();
-      } else if (state.pendingUpgrades > 0) {
-        //---/// U키 호출 후 아직 남은 pending 없음 — 캡처 없이 종료 ///---
-      } else {
-        //---/// 모든 업그레이드 소진 — 캡처 복귀 ///---
-        canvas.requestPointerLock();
+      } else if (_shouldRestorePointerLockAfterUpgrade && state.pendingUpgrades <= 0) {
+        requestGameplayPointerLock();
       }
     });
     choicesEl.appendChild(btn);
   });
-  state.upgrading = true; 
-  document.exitPointerLock(); 
-  document.getElementById('upgrade-overlay').style.display = 'flex';
-  // 0.5초 뒤에 클릭 활성화
+
+  _shouldRestorePointerLockAfterUpgrade = isPointerLocked();
+  state.upgrading = true;
+  if (_shouldRestorePointerLockAfterUpgrade) document.exitPointerLock();
+  overlayEl.style.display = 'flex';
+
   setTimeout(() => {
     if (state.upgrading) choicesEl.style.pointerEvents = 'auto';
   }, 500);
@@ -6329,12 +6405,6 @@ function renderDead() {
   ctx.restore();
 }
 
-document.addEventListener('keydown', e => { if (e.code==='Enter' && state.dead && state.running) { initGame(); BGM.start(); } });
-//---/// U키: 누적된 업그레이드 1개 즉시 소진 ///---
-document.addEventListener('keydown', e => {
-  if (e.code !== 'KeyU' || !state.running || state.dead || state.upgrading || state.paused) return;
-  if (state.pendingUpgrades > 0) { state.pendingUpgrades--; showUpgradeUI(); }
-});
 
 function gameLoop(timestamp) {
   if (!state.running) return;
