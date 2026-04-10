@@ -194,6 +194,11 @@ if (!Math.hypot) {
   };
 };
 
+//---/// 성능 보조 유틸 ///---
+function distSq(dx, dy) { return dx * dx + dy * dy; }
+function distBetweenSq(ax, ay, bx, by) { const dx = ax - bx, dy = ay - by; return dx * dx + dy * dy; }
+function withinDistSq(ax, ay, bx, by, r) { const dx = ax - bx, dy = ay - by; return dx * dx + dy * dy < r * r; }
+
 //---/// Web Audio 사운드 엔진 — 첫 인터랙션 시 생성 (브라우저 autoplay 정책 대응) ///---
 let audioCtx = null;
 function getAudioCtx() {
@@ -1166,6 +1171,10 @@ let dashCooldown = 0; let dashActive = 0; let dashVX = 0; let dashVY = 0; let sc
 const DASH_DURATION = 0.13; const DASH_SPEED = 14; const DASH_COOLDOWN = 0.8; const DASH_RADIUS = 0.238;
 let emptyClickCount = 0; let emptyClickTimer = 0; let footstepTimer = 0;
 let screenParticles = [];
+let _perfFrame = 0;
+let _enemySeparationAccum = 0;
+const _interactionCache = { timer: 0, merchant: null, portalActive: false };
+const _sortedExplosionFX = [];
 
 //---/// 후반부 Edge 최적화용 상한선 ///---
 const PERF_CAP_PARTICLES = 250;
@@ -3595,8 +3604,8 @@ function updateEnemies(dt) {
       for (let tx = enTileX - 1; tx <= enTileX + 1; tx++) {
         if (tx < 0 || ty < 0 || tx >= MAP_W || ty >= MAP_H || !currentMap[ty][tx]) continue;
         const nearX = Math.max(tx, Math.min(tx + 1, en.x)), nearY = Math.max(ty, Math.min(ty + 1, en.y));
-        const odx = en.x - nearX, ody = en.y - nearY; const od = Math.hypot(odx, ody);
-        if (od < ENEMY_RADIUS && od > 0.0001) { const push = (ENEMY_RADIUS - od) / od; en.x += odx * push; en.y += ody * push; }
+        const odx = en.x - nearX, ody = en.y - nearY; const odSq = odx * odx + ody * ody;
+        if (odSq < ENEMY_RADIUS * ENEMY_RADIUS && odSq > 0.00000001) { const od = Math.sqrt(odSq); const push = (ENEMY_RADIUS - od) / od; en.x += odx * push; en.y += ody * push; }
       }
     }
     const minDist = ENEMY_RADIUS + PLAYER_RADIUS;
@@ -3627,12 +3636,16 @@ function updateEnemies(dt) {
     }
   });
   const MIN_EN = ENEMY_RADIUS * 2;
+  _enemySeparationAccum += dt;
+  if (_enemySeparationAccum < 0.033) return;
+  _enemySeparationAccum = 0;
   for (let i = 0; i < enemies.length; i++) {
     if (enemies[i].hp <= 0) continue;
     for (let j = i + 1; j < enemies.length; j++) {
       if (enemies[j].hp <= 0) continue;
-      const ex = enemies[j].x - enemies[i].x, ey = enemies[j].y - enemies[i].y; const ed = Math.hypot(ex, ey);
-      if (ed < MIN_EN && ed > 0.001) {
+      const ex = enemies[j].x - enemies[i].x, ey = enemies[j].y - enemies[i].y; const edSq = ex * ex + ey * ey;
+      if (edSq < MIN_EN * MIN_EN && edSq > 0.000001) {
+        const ed = Math.sqrt(edSq);
         const push = (MIN_EN - ed) / ed * 0.5; const px = ex * push, py = ey * push;
         if (!isWall(enemies[i].x - px, enemies[i].y)) enemies[i].x -= px; if (!isWall(enemies[i].x, enemies[i].y - py)) enemies[i].y -= py;
         if (!isWall(enemies[j].x + px, enemies[j].y)) enemies[j].x += px; if (!isWall(enemies[j].x, enemies[j].y + py)) enemies[j].y += py;
@@ -3644,60 +3657,79 @@ function updateEnemies(dt) {
 //---/// 적 총알 이동, 벽 충돌, 플레이어 피격 처리 ///---
 function updateEnemyBullets(dt) {
   const BULLET_RADIUS = 0.12; const PLAYER_RADIUS = 0.32;
-  
-  let keepCount = 0; // 살아남은 총알 개수 추적
+  const enemyHitRadius = BULLET_RADIUS + 0.323;
+  const enemyHitRadiusSq = enemyHitRadius * enemyHitRadius;
+
+  let keepCount = 0;
   for (let i = 0; i < enemyBullets.length; i++) {
     const b = enemyBullets[i];
     b.life -= dt;
     if (b.life <= 0) continue;
-    
+
     b.x += b.vx * dt; b.y += b.vy * dt;
     if (isWall(b.x, b.y)) continue;
-    
+
     if (b.reflected) {
       let hit = false;
-      enemies.forEach(en => {
-        if (hit || en.hp <= 0) return;
-        if (Math.hypot(b.x - en.x, b.y - en.y) < BULLET_RADIUS + 0.323) {
+      for (let j = 0; j < enemies.length; j++) {
+        const en = enemies[j];
+        if (en.hp <= 0) continue;
+        const dx = b.x - en.x, dy = b.y - en.y;
+        if (dx * dx + dy * dy < enemyHitRadiusSq) {
           const rdmg = Math.round(enemyScale.dmg * 2 * gun.MELEE_MULT);
-          applyDamage(en, rdmg, false, true); // isPlayerAttack=true: 킬 보너스·마법 효과 적용
+          applyDamage(en, rdmg, false, true);
           applyMagicEffects(en);
           spawnBlood(en.x, en.y, 4);
-          markHUDDirty(); hit = true;
+          markHUDDirty();
+          hit = true;
+          break;
         }
-      });
+      }
       if (hit) continue;
     }
-    
-    const currentRadius = b.isSlash ? 0.4 : BULLET_RADIUS;
-    if (!b.reflected && Math.hypot(b.x - player.x, b.y - player.y) < currentRadius + PLAYER_RADIUS) {
-      const dmg = Math.round(enemyScale.dmg * (b.isSlash ? 1.5 : 0.7));
-      const absorbed = Math.min(state.armor, Math.floor(dmg / 2));
-      state.armor -= absorbed; state.health -= (dmg - absorbed);
-      damageFlashAlpha = 0.5;
-      damageIndicators.push({ angle: Math.atan2(b.y - player.y, b.x - player.x), alpha: 1.0 });
-      sndPlayerHit();
-      if (state.health <= 0) { state.health = 0; state.dead = true; }
-      markHUDDirty();
-      continue;
-    }
-    
-    let ffHit = false;
-    enemies.forEach(en => {
-      if (ffHit || en.hp <= 0 || en === b.shooter) return;
-      if (Math.hypot(b.x - en.x, b.y - en.y) < BULLET_RADIUS + 0.323) {
-        const dmg = Math.round(enemyScale.dmg * 0.7);
-        applyDamage(en, dmg);
-        spawnBlood(en.x, en.y, 3);
-        markHUDDirty(); ffHit = true;
+
+    const currentRadius = (dashActive > 0) ? DASH_RADIUS : PLAYER_RADIUS;
+    const hitPlayerRadius = BULLET_RADIUS + currentRadius;
+    const pdx = b.x - player.x, pdy = b.y - player.y;
+    if (!b.reflected && pdx * pdx + pdy * pdy < hitPlayerRadius * hitPlayerRadius) {
+      if (dashActive > 0 && gun.meleeStunn) {
+        b.reflected = true;
+        b.vx *= -1.2; b.vy *= -1.2;
+      } else {
+        const dmg = enemyScale.dmg;
+        const absorbed = Math.min(state.armor, Math.floor(dmg / 2));
+        state.armor -= absorbed; state.health -= (dmg - absorbed);
+        damageFlashAlpha = 0.45;
+        const enemyAngle = Math.atan2(b.y - player.y, b.x - player.x);
+        damageIndicators.push({ angle: enemyAngle, alpha: 1.0 });
+        sndPlayerHit();
+        if (state.health <= 0) { state.health = 0; state.dead = true; }
+        markHUDDirty();
+        continue;
       }
-    });
-    if (ffHit) continue;
-    
-    // 조건에 맞는 경우만 배열 앞쪽으로 옮겨 덮어쓰기
+    }
+
+    if (b.reflected) {
+      let hitEnemy = false;
+      for (let j = 0; j < enemies.length; j++) {
+        const en = enemies[j];
+        if (en.hp <= 0) continue;
+        const dx = b.x - en.x, dy = b.y - en.y;
+        if (dx * dx + dy * dy < enemyHitRadiusSq) {
+          const rdmg = Math.round(enemyScale.dmg * 2 * gun.MELEE_MULT);
+          applyDamage(en, rdmg, false, true);
+          applyMagicEffects(en);
+          spawnBlood(en.x, en.y, 4);
+          markHUDDirty();
+          hitEnemy = true;
+          break;
+        }
+      }
+      if (hitEnemy) continue;
+    }
+
     enemyBullets[keepCount++] = b;
   }
-  // 실제 살아남은 길이만큼 배열 자르기 (새 배열 생성 안 함)
   enemyBullets.length = keepCount;
 }
 
@@ -4329,32 +4361,34 @@ function renderLightningLines() {
 }
 function renderExplosionFX(zBuffer) {
   if (explosionFX.length === 0) return;
-  
-  // 거리에 따라 정렬 (멀리 있는 폭발부터 먼저 그리도록)
-  const sortedFX = [...explosionFX].map(fx => {
-    return { fx, dist: Math.hypot(fx.x - player.x, fx.y - player.y) };
-  }).sort((a, b) => b.dist - a.dist);
 
-  sortedFX.forEach(({ fx, dist }) => {
+  _sortedExplosionFX.length = explosionFX.length;
+  for (let i = 0; i < explosionFX.length; i++) {
+    const fx = explosionFX[i];
+    _sortedExplosionFX[i] = { fx, distSq: distBetweenSq(fx.x, fx.y, player.x, player.y) };
+  }
+  _sortedExplosionFX.sort((a, b) => b.distSq - a.distSq);
+
+  for (let i = 0; i < _sortedExplosionFX.length; i++) {
+    const fx = _sortedExplosionFX[i].fx;
+    const dist = Math.sqrt(_sortedExplosionFX[i].distSq);
     const dx = fx.x - player.x, dy = fx.y - player.y;
     let sa = Math.atan2(dy, dx) - player.angle;
     while (sa >  Math.PI) sa -= Math.PI * 2;
     while (sa < -Math.PI) sa += Math.PI * 2;
-    
-    if (Math.abs(sa) > HALF_FOV + 0.8) return; 
-    if (dist < 0.1) return;
-    
+
+    if (Math.abs(sa) > HALF_FOV + 0.8) continue;
+    if (dist < 0.1) continue;
+
     const corrected = dist * Math.cos(sa);
     const screenX = Math.floor(((sa / FOV) + 0.5) * SCREEN_W);
     const screenR = Math.floor((SCREEN_H / corrected) * fx.r * 0.5);
-    if (screenR < 2) return;
+    if (screenR < 2) continue;
 
     const baseAlpha = Math.max(0, fx.life) * 0.9;
-    const halfW = screenR * 1.5; // 클리핑 범위 (충격파 고려)
+    const halfW = screenR * 1.5;
 
     ctx.save();
-    
-    //---/// Z-Buffer 클리핑 (벽 뒤에 있는 폭발은 가려지게 처리) ///---
     ctx.beginPath();
     let visible = false;
     let startX = -1;
@@ -4363,33 +4397,21 @@ function renderExplosionFX(zBuffer) {
     for (let px = startPx; px <= endPx; px++) {
       const ri = Math.min(NUM_RAYS - 1, Math.max(0, Math.round(px * NUM_RAYS / SCREEN_W)));
       const isVis = (px < SCREEN_W && corrected < zBuffer[ri]);
-      
       if (isVis) {
         if (startX === -1) startX = px;
         visible = true;
-      } else {
-        if (startX !== -1) {
-          ctx.rect(startX, 0, px - startX, SCREEN_H);
-          startX = -1;
-        }
+      } else if (startX !== -1) {
+        ctx.rect(startX, 0, px - startX, SCREEN_H);
+        startX = -1;
       }
     }
-
-    // ==========================================
-    // [버그 수정] 루프가 끝난 뒤 남은 사각형 마저 그리기
-    if (startX !== -1) {
-      ctx.rect(startX, 0, endPx + 1 - startX, SCREEN_H);
-    }
-    // ==========================================
-
-    if (!visible) { ctx.restore(); return; }
+    if (startX !== -1) ctx.rect(startX, 0, endPx + 1 - startX, SCREEN_H);
+    if (!visible) { ctx.restore(); continue; }
     ctx.clip();
-    
-    //---/// 폭발 렌더링 (스크린 블렌딩으로 빛이 화사하게 겹치게) ///---
+
     ctx.globalCompositeOperation = 'screen';
     const centerY = Math.floor(SCREEN_H * 0.5);
 
-    // 1. 메인 폭발 구체 (그라데이션)
     ctx.beginPath();
     ctx.arc(screenX, centerY, screenR, 0, Math.PI * 2);
     const mainGrad = ctx.createRadialGradient(screenX, centerY, 0, screenX, centerY, screenR);
@@ -4399,7 +4421,6 @@ function renderExplosionFX(zBuffer) {
     ctx.fillStyle = mainGrad;
     ctx.fill();
 
-    // 2. 코어 섬광 (매우 밝은 중앙 빛, 터지는 직후에만 팝업)
     if (fx.life > 0.6) {
       const coreAlpha = (fx.life - 0.6) / 0.4 * baseAlpha;
       ctx.beginPath();
@@ -4411,19 +4432,14 @@ function renderExplosionFX(zBuffer) {
       ctx.fill();
     }
 
-    // 3. 충격파 링 (바닥으로 퍼지는 타원 형태)
     ctx.beginPath();
-    if (ctx.ellipse) {
-      ctx.ellipse(screenX, centerY + screenR * 0.2, screenR * 1.3, screenR * 0.4, 0, 0, Math.PI * 2);
-    } else {
-      ctx.arc(screenX, centerY, screenR * 1.2, 0, Math.PI * 2);
-    }
+    if (ctx.ellipse) ctx.ellipse(screenX, centerY + screenR * 0.2, screenR * 1.3, screenR * 0.4, 0, 0, Math.PI * 2);
+    else ctx.arc(screenX, centerY, screenR * 1.2, 0, Math.PI * 2);
     ctx.strokeStyle = `${fx.color}${baseAlpha * 0.8})`;
     ctx.lineWidth = Math.max(2, screenR * 0.15 * fx.life);
     ctx.stroke();
-
     ctx.restore();
-  });
+  }
 }
 
 let _screenImgData = null; // 최적화: 전역 이미지 버퍼 재사용
@@ -4550,32 +4566,48 @@ function addSpriteToPool(type, obj, dist) {
 }
 
 function renderSprites(zBuffer, bobY) {
-  _spriteCount = 0; // 풀 인덱스 초기화
+  _spriteCount = 0;
 
-  // [최적화] new Map() 매 프레임 생성 방지 — 전역 맵을 clear()하여 재사용
   _soulEnemyMap.clear();
-  soulFX.forEach(s => { if (s.en) _soulEnemyMap.set(s.en, 1 - s.life / s.maxLife); });
+  for (let i = 0; i < soulFX.length; i++) {
+    const s = soulFX[i];
+    if (s.en) _soulEnemyMap.set(s.en, 1 - s.life / s.maxLife);
+  }
 
-  enemies.forEach(en => addSpriteToPool('enemy', en, Math.hypot(en.x-player.x, en.y-player.y)));
-  enemyBullets.forEach(b => addSpriteToPool('ebullet', b, Math.hypot(b.x-player.x, b.y-player.y)));
-  items.forEach(it => { if (it.active) addSpriteToPool('item', it, Math.hypot(it.x-player.x, it.y-player.y)); });
-  // [핵심 최적화] particles는 정렬 풀에서 제거 — renderParticles3D()로 분리
-  soulFX.forEach(s => addSpriteToPool('soul', s, Math.hypot(s.x-player.x, s.y-player.y)));
-  bossAoes.forEach(a => addSpriteToPool('aoe', a, Math.hypot(a.x-player.x, a.y-player.y)));
-  if (portal && portal.active) addSpriteToPool('portal', portal, Math.hypot(portal.x - player.x, portal.y - player.y));
-  if (portal2 && (portal2.active || portal2.spawning)) addSpriteToPool('portal', portal2, Math.hypot(portal2.x - player.x, portal2.y - player.y));
-  
-  // [최적화] slice() 대신 전역 버퍼에 복사 후 정렬 — 매 프레임 새 배열 생성 방지
+  for (let i = 0; i < enemies.length; i++) {
+    const en = enemies[i];
+    addSpriteToPool('enemy', en, distBetweenSq(en.x, en.y, player.x, player.y));
+  }
+  for (let i = 0; i < enemyBullets.length; i++) {
+    const b = enemyBullets[i];
+    addSpriteToPool('ebullet', b, distBetweenSq(b.x, b.y, player.x, player.y));
+  }
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    if (it.active) addSpriteToPool('item', it, distBetweenSq(it.x, it.y, player.x, player.y));
+  }
+  for (let i = 0; i < soulFX.length; i++) {
+    const s = soulFX[i];
+    addSpriteToPool('soul', s, distBetweenSq(s.x, s.y, player.x, player.y));
+  }
+  for (let i = 0; i < bossAoes.length; i++) {
+    const a = bossAoes[i];
+    addSpriteToPool('aoe', a, distBetweenSq(a.x, a.y, player.x, player.y));
+  }
+  if (portal && portal.active) addSpriteToPool('portal', portal, distBetweenSq(portal.x, portal.y, player.x, player.y));
+  if (portal2 && (portal2.active || portal2.spawning)) addSpriteToPool('portal', portal2, distBetweenSq(portal2.x, portal2.y, player.x, player.y));
+
   _activeSpritesSorted.length = _spriteCount;
   for (let i = 0; i < _spriteCount; i++) _activeSpritesSorted[i] = _spritesPool[i];
   _activeSpritesSorted.sort((a,b) => b.dist - a.dist);
 
-  _activeSpritesSorted.forEach(({ type, obj, dist }) => {
-    // [이 아래부터는 기존 renderSprites 내부 로직과 완전히 동일합니다]
+  for (let si = 0; si < _activeSpritesSorted.length; si++) {
+    const { type, obj } = _activeSpritesSorted[si];
     const dx=obj.x-player.x, dy=obj.y-player.y;
+    const dist = Math.sqrt(dx*dx + dy*dy);
     let sa = Math.atan2(dy,dx) - player.angle;
     while (sa >  Math.PI) sa -= Math.PI*2; while (sa < -Math.PI) sa += Math.PI*2;
-    if (Math.abs(sa) > HALF_FOV+0.3 || dist < 0.5) return;
+    if (Math.abs(sa) > HALF_FOV+0.3 || dist < 0.5) continue;
     const corrected = dist * Math.cos(sa);
     const spriteH = Math.floor((SCREEN_H/corrected)*0.85); const screenX = Math.floor(((sa/FOV)+0.5)*SCREEN_W);
     const spriteTop = Math.floor((SCREEN_H-spriteH)/2 + bobY); const halfW = Math.floor(spriteH*0.5);
@@ -5143,7 +5175,7 @@ function renderSprites(zBuffer, bobY) {
       }
     }
     ctx.restore();
-  });
+  }
 }
 function renderSkyStrikes() {
   if (typeof skyStrikes === 'undefined' || skyStrikes.length === 0) return;
@@ -6416,6 +6448,7 @@ function gameLoop(timestamp) {
   }
 
   const dt = Math.min((timestamp - lastTime) / 1000, 0.05); lastTime = timestamp;
+  _perfFrame++;
 
   if (portal) {
     portal.time += dt;
@@ -6479,10 +6512,17 @@ function gameLoop(timestamp) {
 
   let interactionMsg = null;
   let interactionColor = '#fff';
-  
-  const merchant = _cachedMerchant && _cachedMerchant.active ? _cachedMerchant : null;
-  if (merchant && Math.hypot(merchant.x - player.x, merchant.y - player.y) < 2.0) {
-     // 플레이어의 현재 점수가 2500점 이상인지 확인하여 안내 문구 변경
+
+  _interactionCache.timer -= dt;
+  if (_interactionCache.timer <= 0) {
+    _interactionCache.timer = 0.1;
+    const merchant = _cachedMerchant && _cachedMerchant.active ? _cachedMerchant : null;
+    _interactionCache.merchant = (merchant && withinDistSq(merchant.x, merchant.y, player.x, player.y, 2.0)) ? merchant : null;
+    _interactionCache.portalActive = (portal && portal.active && withinDistSq(portal.x, portal.y, player.x, player.y, 1.5))
+      || (portal2 && portal2.active && withinDistSq(portal2.x, portal2.y, player.x, player.y, 1.5));
+  }
+
+  if (_interactionCache.merchant) {
      if (state.score >= 2500) {
        interactionColor = '#ffaa00';
        interactionMsg = '[E] TRADE SOULS FOR POWER (2500 SCORE)';
@@ -6490,10 +6530,8 @@ function gameLoop(timestamp) {
        interactionColor = '#888';
        interactionMsg = 'NOT ENOUGH SOULS (2500 SCORE)';
      }
-  } else {
-     const _activePortal = (portal && portal.active && Math.hypot(portal.x - player.x, portal.y - player.y) < 1.5)
-        || (portal2 && portal2.active && Math.hypot(portal2.x - player.x, portal2.y - player.y) < 1.5);
-     if (_activePortal) interactionMsg = 'PRESS [E] TO ENTER VORTEX';
+  } else if (_interactionCache.portalActive) {
+     interactionMsg = 'PRESS [E] TO ENTER VORTEX';
   }
   
   if (interactionMsg && state.fadeOut === 0) {
