@@ -782,7 +782,7 @@ function initWallTextures() {
   // 공통 텍스처 생성 유틸 함수
   function createTex(drawFn) {
     const c = document.createElement('canvas'); c.width = 64; c.height = 64;
-    const ctx = c.getContext('2d');
+    const ctx = c.getContext('2d', { willReadFrequently: true });
     drawFn(ctx);
     // 그려진 캔버스에서 [R, G, B, A] 픽셀 배열만 추출해서 반환
     return ctx.getImageData(0, 0, 64, 64).data;
@@ -1167,13 +1167,16 @@ const DASH_DURATION = 0.13; const DASH_SPEED = 14; const DASH_COOLDOWN = 0.8; co
 let emptyClickCount = 0; let emptyClickTimer = 0; let footstepTimer = 0;
 let screenParticles = [];
 
-//---/// 후반부 Edge 최적화용 상한선 ///---
-const PERF_CAP_PARTICLES = 250;
-const PERF_CAP_SCREEN_PARTICLES = 80;
-const PERF_CAP_SOUL_FX = 60;
-const PERF_CAP_EXPLOSION_FX = 24;
-const PERF_CAP_ENEMY_BULLETS = 80;
-const PERF_CAP_BOSS_AOES = 16;
+//---/// Edge 브라우저 감지 (PERF_CAP 산정에 먼저 필요) ///---
+const _IS_EDGE = /Edg\//.test(navigator.userAgent);
+
+//---/// 후반부 Edge 최적화용 상한선 (Edge에서는 절반으로 축소) ///---
+let PERF_CAP_PARTICLES      = _IS_EDGE ? 120 : 250;
+let PERF_CAP_SCREEN_PARTICLES = _IS_EDGE ?  40 :  80;
+let PERF_CAP_SOUL_FX        = _IS_EDGE ?  30 :  60;
+let PERF_CAP_EXPLOSION_FX   = _IS_EDGE ?  12 :  24;
+let PERF_CAP_ENEMY_BULLETS  = _IS_EDGE ?  40 :  80;
+let PERF_CAP_BOSS_AOES      = _IS_EDGE ?   8 :  16;
 
 //---/// 배열 상한 푸시 헬퍼 ///---
 function cappedPush(arr, max, item) {
@@ -1202,8 +1205,43 @@ let _cachedBoss = null;
 let _cachedMerchant = null;
 
 
-const canvas = document.getElementById('game'); const ctx = canvas.getContext('2d');
+const canvas = document.getElementById('game'); const ctx = canvas.getContext('2d', { willReadFrequently: true });
 const keys = {};
+
+//---/// Edge 적응형 성능 품질 시스템 ///---
+let _shadowDisabled = _IS_EDGE;
+
+// shadowBlur/shadowColor를 no-op으로 패치하여 모든 기존 코드에 투명하게 적용
+function _disableShadows() {
+  if (_shadowDisabled) return;
+  _shadowDisabled = true;
+  Object.defineProperty(ctx, 'shadowBlur',  { get() { return 0; }, set(_v) {}, configurable: true });
+  Object.defineProperty(ctx, 'shadowColor', { get() { return 'transparent'; }, set(_v) {}, configurable: true });
+}
+function _enableShadows() {
+  if (!_shadowDisabled) return;
+  _shadowDisabled = false;
+  delete ctx.shadowBlur;
+  delete ctx.shadowColor;
+}
+if (_IS_EDGE) _disableShadows();
+
+// FPS 기반 동적 품질 조절 — 30fps 미만 지속 시 자동으로 그림자 비활성화
+let _fpsFrameCount = 0, _fpsElapsed = 0, _fpsBadSeconds = 0;
+function _trackFPS(dt) {
+  _fpsFrameCount++;
+  _fpsElapsed += dt;
+  if (_fpsElapsed >= 1.0) {
+    const fps = _fpsFrameCount / _fpsElapsed;
+    _fpsFrameCount = 0; _fpsElapsed = 0;
+    if (fps < 30) {
+      _fpsBadSeconds++;
+      if (_fpsBadSeconds >= 3 && !_shadowDisabled) _disableShadows();
+    } else {
+      _fpsBadSeconds = 0;
+    }
+  }
+}
 
 const HUD = {
   score: null, stage: null, kills: null, damage: null,
@@ -6416,6 +6454,7 @@ function gameLoop(timestamp) {
   }
 
   const dt = Math.min((timestamp - lastTime) / 1000, 0.05); lastTime = timestamp;
+  _trackFPS(dt);
 
   if (portal) {
     portal.time += dt;
