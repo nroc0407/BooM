@@ -634,11 +634,7 @@ function generateBossMap() {
   //---/// 외벽 보정 ///---
   for (let x = 0; x < W; x++) { map[0][x] = 1; map[H-1][x] = 1; }
   for (let y = 0; y < H; y++) { map[y][0] = 1; map[y][W-1] = 1; }
-
-  //---/// 방 타입 색상 (1=적벽) ///---
-  for (let y = 1; y < H-1; y++)
-    for (let x = 1; x < W-1; x++)
-      if (map[y][x] === 1) map[y][x] = 1;
+  // [제거됨] 벽을 다시 1로 설정하는 dead-code 루프 삭제
 
   const arenaCX = arenaX + Math.floor(arenaW / 2);
   const arenaCY = arenaY + Math.floor(arenaH / 2);
@@ -782,7 +778,7 @@ function initWallTextures() {
   // 공통 텍스처 생성 유틸 함수
   function createTex(drawFn) {
     const c = document.createElement('canvas'); c.width = 64; c.height = 64;
-    const ctx = c.getContext('2d', { willReadFrequently: true });
+    const ctx = c.getContext('2d');
     drawFn(ctx);
     // 그려진 캔버스에서 [R, G, B, A] 픽셀 배열만 추출해서 반환
     return ctx.getImageData(0, 0, 64, 64).data;
@@ -1103,10 +1099,11 @@ class SiegeGunner {
     this._firedOnSight = false;
     this.stepTimer = 0.3 + Math.random() * 0.3;
     this.chargeTime = 0;
-    this._burstCount = 0;    // 남은 버스트 발수
-    this._burstTimer = 0;    // 버스트 간격 타이머
     this._laserAlpha = 0;    // 조준선 알파
     this._aimAngle = 0;      // 조준 각도
+    this._attackMode = null; // 'charge' | 'shotgun'
+    this._isCharging = false;
+    this._chargeTimer = 0;
   }
 }
 
@@ -1123,10 +1120,10 @@ class Screamer {
     this.stunTimer = 0; this.frozenTimer = 0;
     this.stepTimer = 0.3 + Math.random() * 0.3;
     this.isScreamer = true;
-    this._screechTimer = 0;      // 첫 발동은 즉시
-    this._screechCooldown = 10.0;
-    this._screechWave = 0;       // 충격파 시각 이펙트
-    this._firedScreech = false;  // 첫 시야 포착 즉시 한 번
+    this._summonTimer = 5.0;
+    this._summonCooldown = 5.0;
+    this._summonWave = 0;
+    this._activated = false;
   }
 }
 
@@ -1167,16 +1164,13 @@ const DASH_DURATION = 0.13; const DASH_SPEED = 14; const DASH_COOLDOWN = 0.8; co
 let emptyClickCount = 0; let emptyClickTimer = 0; let footstepTimer = 0;
 let screenParticles = [];
 
-//---/// Edge 브라우저 감지 (PERF_CAP 산정에 먼저 필요) ///---
-const _IS_EDGE = /Edg\//.test(navigator.userAgent);
-
-//---/// 후반부 Edge 최적화용 상한선 (Edge에서는 절반으로 축소) ///---
-let PERF_CAP_PARTICLES      = _IS_EDGE ? 120 : 250;
-let PERF_CAP_SCREEN_PARTICLES = _IS_EDGE ?  40 :  80;
-let PERF_CAP_SOUL_FX        = _IS_EDGE ?  30 :  60;
-let PERF_CAP_EXPLOSION_FX   = _IS_EDGE ?  12 :  24;
-let PERF_CAP_ENEMY_BULLETS  = _IS_EDGE ?  40 :  80;
-let PERF_CAP_BOSS_AOES      = _IS_EDGE ?   8 :  16;
+//---/// 후반부 Edge 최적화용 상한선 ///---
+const PERF_CAP_PARTICLES = 250;
+const PERF_CAP_SCREEN_PARTICLES = 80;
+const PERF_CAP_SOUL_FX = 60;
+const PERF_CAP_EXPLOSION_FX = 24;
+const PERF_CAP_ENEMY_BULLETS = 80;
+const PERF_CAP_BOSS_AOES = 16;
 
 //---/// 배열 상한 푸시 헬퍼 ///---
 function cappedPush(arr, max, item) {
@@ -1205,43 +1199,8 @@ let _cachedBoss = null;
 let _cachedMerchant = null;
 
 
-const canvas = document.getElementById('game'); const ctx = canvas.getContext('2d', { willReadFrequently: true });
+const canvas = document.getElementById('game'); const ctx = canvas.getContext('2d');
 const keys = {};
-
-//---/// Edge 적응형 성능 품질 시스템 ///---
-let _shadowDisabled = _IS_EDGE;
-
-// shadowBlur/shadowColor를 no-op으로 패치하여 모든 기존 코드에 투명하게 적용
-function _disableShadows() {
-  if (_shadowDisabled) return;
-  _shadowDisabled = true;
-  Object.defineProperty(ctx, 'shadowBlur',  { get() { return 0; }, set(_v) {}, configurable: true });
-  Object.defineProperty(ctx, 'shadowColor', { get() { return 'transparent'; }, set(_v) {}, configurable: true });
-}
-function _enableShadows() {
-  if (!_shadowDisabled) return;
-  _shadowDisabled = false;
-  delete ctx.shadowBlur;
-  delete ctx.shadowColor;
-}
-if (_IS_EDGE) _disableShadows();
-
-// FPS 기반 동적 품질 조절 — 30fps 미만 지속 시 자동으로 그림자 비활성화
-let _fpsFrameCount = 0, _fpsElapsed = 0, _fpsBadSeconds = 0;
-function _trackFPS(dt) {
-  _fpsFrameCount++;
-  _fpsElapsed += dt;
-  if (_fpsElapsed >= 1.0) {
-    const fps = _fpsFrameCount / _fpsElapsed;
-    _fpsFrameCount = 0; _fpsElapsed = 0;
-    if (fps < 30) {
-      _fpsBadSeconds++;
-      if (_fpsBadSeconds >= 3 && !_shadowDisabled) _disableShadows();
-    } else {
-      _fpsBadSeconds = 0;
-    }
-  }
-}
 
 const HUD = {
   score: null, stage: null, kills: null, damage: null,
@@ -1332,6 +1291,214 @@ function consumeRemainingItemsBeforeTransition() {
   markHUDDirty();
 }
 
+function isCodexOpen() {
+  return !!document.getElementById('codex-overlay');
+}
+
+function isDebugOverlayOpen() {
+  return !!document.getElementById('debug-upgrade-overlay');
+}
+
+function hasBlockingOverlay() {
+  return isCodexOpen() || isDebugOverlayOpen();
+}
+
+function toggleCodexOverlay() {
+  const existing = document.getElementById('codex-overlay');
+  if (existing) {
+    existing.remove();
+    hidePauseOverlay();
+    if (state.running && !state.dead && !state.upgrading) {
+      state.paused = false;
+      requestGameplayPointerLock();
+    }
+    return;
+  }
+
+  if (!state.running || state.dead || state.upgrading) return;
+
+  state.paused = true;
+  if (isPointerLocked()) document.exitPointerLock();
+  hidePauseOverlay();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'codex-overlay';
+  overlay.style.cssText = `
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    background: rgba(0,0,0,0.92);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 14px;
+    font-family: 'Share Tech Mono', monospace;
+    letter-spacing: 2px;
+    color: #ddd;
+  `;
+  overlay.innerHTML = `
+    <div style="font-size:36px;color:#fff;margin-bottom:20px;">
+  CODEX
+</div>
+
+<div style="width:min(980px, 92vw); max-height:70vh; overflow-y:auto; text-align:left; line-height:1.8; color:#bbb; border:1px solid #444; background:rgba(20,20,20,0.85); padding:24px;">
+
+  <div style="display:flex; gap:20px; margin-bottom:22px; border-bottom:1px solid #333; padding-bottom:14px;">
+    <canvas class="codex-enemy-canvas" data-enemy="enemy" width="160" height="160" style="width:160px;height:160px;border:1px solid #555;background:linear-gradient(180deg,#111,#1b1b1b);image-rendering:pixelated;"></canvas>
+    <div style="flex:1;">
+      <div style="font-size:24px; color:#fff;">Enemy</div>
+      <div style="color:#888; font-size:14px;">분류: 근접형</div>
+      <div style="margin-top:8px;">
+        가장 흔한 적. 특별한 능력은 없지만, 숫자가 쌓이면 압박감이 커진다.
+      </div>
+      <div style="margin-top:8px; color:#ddd;">
+        <b style="color:#fff;">대처법:</b> 혼자일 때는 위협적이지 않다. 다른 적과 함께 몰려오면 이동 공간을 빼앗기기 쉬우니, 먼저 숫자를 줄여라.
+      </div>
+    </div>
+  </div>
+
+  <div style="display:flex; gap:20px; margin-bottom:22px; border-bottom:1px solid #333; padding-bottom:14px;">
+    <canvas class="codex-enemy-canvas" data-enemy="shooter" width="160" height="160" style="width:160px;height:160px;border:1px solid #555;background:linear-gradient(180deg,#111,#1b1b1b);image-rendering:pixelated;"></canvas>
+    <div style="flex:1;">
+      <div style="font-size:24px; color:#fff;">Shooter</div>
+      <div style="color:#888; font-size:14px;">분류: 원거리형</div>
+      <div style="margin-top:8px;">
+        거리를 유지하며 사격하는 기본 원거리 적. 방치하면 지속적으로 압박을 가한다.
+      </div>
+      <div style="margin-top:8px; color:#ddd;">
+        <b style="color:#fff;">대처법:</b> 시야를 오래 주지 마라. 근접 적을 상대하는 중에도 슈터의 위치를 항상 의식해야 한다. 엄폐가 가능하다면 우선 시야를 끊는 것이 좋다.
+      </div>
+    </div>
+  </div>
+
+  <div style="display:flex; gap:20px; margin-bottom:22px; border-bottom:1px solid #333; padding-bottom:14px;">
+    <canvas class="codex-enemy-canvas" data-enemy="brute" width="160" height="160" style="width:160px;height:160px;border:1px solid #555;background:linear-gradient(180deg,#111,#1b1b1b);image-rendering:pixelated;"></canvas>
+    <div style="flex:1;">
+      <div style="font-size:24px; color:#fff;">Brute</div>
+      <div style="color:#888; font-size:14px;">분류: 돌격형</div>
+      <div style="margin-top:8px;">
+        느리지만 강인한 강화 근접 적. 차지 공격으로 순식간에 거리를 좁히며, 약해지면 더욱 난폭해진다.
+      </div>
+      <div style="margin-top:8px; color:#ddd;">
+        <b style="color:#fff;">대처법:</b> 정면에서 받아내지 마라. 돌진 전에 움직임이 커지면 즉시 옆으로 빠져야 한다. 좁은 공간에서는 특히 위험하다.
+      </div>
+    </div>
+  </div>
+
+  <div style="display:flex; gap:20px; margin-bottom:22px; border-bottom:1px solid #333; padding-bottom:14px;">
+    <canvas class="codex-enemy-canvas" data-enemy="phantom" width="160" height="160" style="width:160px;height:160px;border:1px solid #555;background:linear-gradient(180deg,#111,#1b1b1b);image-rendering:pixelated;"></canvas>
+    <div style="flex:1;">
+      <div style="font-size:24px; color:#fff;">Phantom</div>
+      <div style="color:#888; font-size:14px;">분류: 특수형</div>
+      <div style="margin-top:8px;">
+        총탄이 통하지 않는 이형의 적. 물리 사격을 무시하며, 근접 타격이나 마법적 공격으로만 처치할 수 있다.
+      </div>
+      <div style="margin-top:8px; color:#ddd;">
+        <b style="color:#fff;">대처법:</b> 총으로 상대하려 하지 마라. 탄만 낭비하게 된다. 접근을 허용하기 싫다면 마법 효과를 준비하고, 그렇지 않다면 근접 공격 타이밍을 익혀라.
+      </div>
+    </div>
+  </div>
+
+  <div style="display:flex; gap:20px; margin-bottom:22px; border-bottom:1px solid #333; padding-bottom:14px;">
+    <canvas class="codex-enemy-canvas" data-enemy="siege" width="160" height="160" style="width:160px;height:160px;border:1px solid #555;background:linear-gradient(180deg,#111,#1b1b1b);image-rendering:pixelated;"></canvas>
+    <div style="flex:1;">
+      <div style="font-size:24px; color:#fff;">Siege Gunner</div>
+      <div style="color:#888; font-size:14px;">분류: 중화기형</div>
+      <div style="margin-top:8px;">
+        조준선을 드러내며 공격을 준비하는 강화 원거리 적. 충전 사격과 산탄 사격 중 하나를 무작위로 사용한다.
+      </div>
+      <div style="margin-top:8px; color:#ddd;">
+        <b style="color:#fff;">대처법:</b> 조준선이 보이면 가만히 있지 마라. 충전 사격은 빠르고 치명적이며, 산탄 사격은 근거리에서 더 위협적이다. 멀리서 방치하지 말고, 시야를 끊거나 빠르게 압박하라.
+      </div>
+    </div>
+  </div>
+
+  <div style="display:flex; gap:20px; margin-bottom:22px; border-bottom:1px solid #333; padding-bottom:14px;">
+    <canvas class="codex-enemy-canvas" data-enemy="screamer" width="160" height="160" style="width:160px;height:160px;border:1px solid #555;background:linear-gradient(180deg,#111,#1b1b1b);image-rendering:pixelated;"></canvas>
+    <div style="flex:1;">
+      <div style="font-size:24px; color:#fff;">Screamer</div>
+      <div style="color:#888; font-size:14px;">분류: 지원형</div>
+      <div style="margin-top:8px;">
+        플레이어를 인식한 뒤 일정 시간마다 새로운 적을 불러내는 증원형 개체. 살아 있는 시간이 길수록 전장이 불리해진다.
+      </div>
+      <div style="margin-top:8px; color:#ddd;">
+        <b style="color:#fff;">대처법:</b> 발견 즉시 우선 제거하라. 다른 적보다 순간 화력이 덜 위협적으로 보일 수 있지만, 시간을 끌수록 상황이 급격히 악화된다.
+      </div>
+    </div>
+  </div>
+
+  <div style="display:flex; gap:20px; margin-bottom:22px; border-bottom:1px solid #333; padding-bottom:14px;">
+    <canvas class="codex-enemy-canvas" data-enemy="ironclad" width="160" height="160" style="width:160px;height:160px;border:1px solid #555;background:linear-gradient(180deg,#111,#1b1b1b);image-rendering:pixelated;"></canvas>
+    <div style="flex:1;">
+      <div style="font-size:24px; color:#fff;">Ironclad</div>
+      <div style="color:#888; font-size:14px;">분류: 중장갑형</div>
+      <div style="margin-top:8px;">
+        두터운 장갑으로 무장한 탱커형 적. 장갑이 먼저 깎이며, 방어가 무너지면 더욱 거칠어진다.
+      </div>
+      <div style="margin-top:8px; color:#ddd;">
+        <b style="color:#fff;">대처법:</b> 탄약 소모를 각오해야 한다. 다른 고위협 적이 함께 있다면 무리해서 먼저 잡으려 하지 말고, 전장을 정리한 뒤 집중 화력을 퍼부어라.
+      </div>
+    </div>
+  </div>
+
+  <div style="display:flex; gap:20px; margin-bottom:4px;">
+    <canvas class="codex-enemy-canvas" data-enemy="boss" width="160" height="160" style="width:160px;height:160px;border:1px solid #555;background:linear-gradient(180deg,#111,#1b1b1b);image-rendering:pixelated;"></canvas>
+    <div style="flex:1;">
+      <div style="font-size:24px; color:#fff;">Boss</div>
+      <div style="color:#888; font-size:14px;">분류: 보스</div>
+      <div style="margin-top:8px;">
+        복수의 패턴과 단계 변화를 가진 대형 적. 전투가 길어질수록 압박 수단도 다양해진다.
+      </div>
+      <div style="margin-top:8px; color:#ddd;">
+        <b style="color:#fff;">대처법:</b> 욕심내지 마라. 짧게 때리고 크게 피하는 것이 기본이다. 보스 자체의 공격뿐 아니라, 전장에 추가되는 위험 요소까지 같이 관리해야 한다.
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div style="margin-top:20px; color:#666; font-size:13px;">
+  [Q] 닫기
+</div>
+  `;
+  overlay.addEventListener('click', (ev) => {
+    if (ev.target === overlay) toggleCodexOverlay();
+  });
+  document.body.appendChild(overlay);
+  renderCodexPreviews();
+  // 정적 렌더이므로 반복 루프 불필요
+
+}
+function randomSpawnMonsterByScreamer(x, y) {
+  const pool = [Enemy, ShooterEnemy];
+  if (state.bossKilled) pool.push(Brute, Phantom, SiegeGunner, Ironclad);
+  const Cls = pool[Math.floor(Math.random() * pool.length)];
+
+  for (let t = 0; t < 24; t++) {
+    const ang = Math.random() * Math.PI * 2;
+    const dist = 1.4 + Math.random() * 1.8;
+    const sx = x + Math.cos(ang) * dist;
+    const sy = y + Math.sin(ang) * dist;
+    if (isWall(sx, sy)) continue;
+    if (Math.hypot(player.x - sx, player.y - sy) < 0.9) continue;
+    const spawned = new Cls(sx, sy);
+    enemies.push(spawned);
+    for (let i = 0; i < 8; i++) {
+      const a2 = Math.random() * Math.PI * 2;
+      cappedPush(particles, PERF_CAP_PARTICLES, {
+        x: sx, y: sy,
+        vx: Math.cos(a2) * (2 + Math.random() * 2),
+        vy: Math.sin(a2) * (2 + Math.random() * 2),
+        life: 0.3 + Math.random() * 0.2,
+        color: '#ffcc00'
+      });
+    }
+    return true;
+  }
+  return false;
+}
+
 function interactWithNearbyObject() {
   if (state.fadeOut !== 0) return false;
 
@@ -1388,7 +1555,7 @@ function toggleDebugUpgradeOverlay() {
     `;
     const groups = { normal:'#88aaff', caliber:'#ffcc44', darkmagic:'#cc66ff', magic:'#33aaff' };
     let html = `<div style="color:#fff;font-size:18px;margin-bottom:16px;letter-spacing:3px">
-      DEBUG — 시스템 메뉴 <span style="color:#666;font-size:13px">[Q] 닫기 (또는 배경 클릭)</span>
+      DEBUG — 시스템 메뉴 <span style="color:#666;font-size:13px">[P] 닫기 (또는 배경 클릭)</span>
     </div>`;
 
     const shopStatus = state.forceShop ? '<span style="color:#4f4">다음 역 예약됨</span>' : '<span style="color:#f44">비활성화</span>';
@@ -1474,6 +1641,11 @@ function handleKeyDown(e) {
   }
 
   if (e.code === 'KeyQ') {
+    toggleCodexOverlay();
+    return;
+  }
+
+  if (e.code === 'KeyP') {
     toggleDebugUpgradeOverlay();
     return;
   }
@@ -1525,7 +1697,7 @@ function showPauseOverlay() {
       <b style="color:#fff">W / A / S / D</b> 이동 &nbsp;|&nbsp; <b style="color:#fff">마우스</b> 시점 전환<br>
       <b style="color:#fff">좌클릭</b> 발사 &nbsp;|&nbsp; <b style="color:#fff">우클릭</b> 근접 공격<br>
       <b style="color:#fff">SPACE</b> 대쉬 &nbsp;|&nbsp; <b style="color:#fff">SHIFT</b> 달리기 &nbsp;|&nbsp; <b style="color:#fff">R</b> 재장전<br>
-      <b style="color:#fff">E</b> 오브젝트 상호작용
+      <b style="color:#fff">E</b> 오브젝트 상호작용 &nbsp;|&nbsp; <b style="color:#fff">Q</b> 도감 &nbsp;|&nbsp; <b style="color:#fff">P</b> 디버그
     </div>
     <div class="sens-wrap" style="margin-top:22px;">
       <label>마우스 민감도</label>
@@ -1557,11 +1729,11 @@ function handlePointerLockChange() {
   const isLocked = isPointerLocked();
   if (!isLocked) mouseLeftDown = false;
 
-  if (!isLocked && state.running && !state.dead && !state.upgrading) {
+  if (!isLocked && state.running && !state.dead && !state.upgrading && !hasBlockingOverlay()) {
     state.paused = true;
     showPauseOverlay();
   } else {
-    state.paused = false;
+    if (!hasBlockingOverlay()) state.paused = false;
     lastTime = performance.now();
     hidePauseOverlay();
   }
@@ -1961,7 +2133,7 @@ function triggerDarkExplosion(cx, cy, _depth) {
     const wasFrozen = en.frozenTimer > 0 && gun.frozenDur > 0;
     
     // [수정됨] 폭발 공격임을 명시 (isExplosion = true) 하여 압축과 무한루프 도는 현상 방지
-    applyDamage(en, dmg, true, true);
+    applyDamage(en, dmg, true, true, 'bullet');
 
     if (wasFrozen) {
       en.frozenTimer = 0;
@@ -2003,13 +2175,26 @@ function applyMagicEffects(en) {
   applyFrozen(en); applyScorch(en);
 }
 
-function applyDamage(en, dmg, isExplosion = false, isPlayerAttack = false) {
+function applyDamage(en, dmg, isExplosion = false, isPlayerAttack = false, dmgType = 'generic') {
   if (en.hp <= 0 || en.isMerchant) return; 
   if (en.isBoss && en.invulnTimer > 0) return;
 
-  //---/// PHANTOM: 20% 확률 피격 무효 + 즉시 블링크 ///---
-  if (en.isPhantom && isPlayerAttack && en._invulnFrame <= 0 && Math.random() < 0.20) {
-    // 블링크 즉시 실행
+  //---/// PHANTOM: 사격 면역, 근접/마법만 유효 ///---
+  if (en.isPhantom && dmgType === 'bullet') {
+    en.hitFlash = Math.max(en.hitFlash || 0, 0.35);
+    for (let i = 0; i < 4; i++) {
+      const ba = Math.random() * Math.PI * 2;
+      cappedPush(particles, PERF_CAP_PARTICLES, {
+        x: en.x, y: en.y,
+        vx: Math.cos(ba) * 2.5, vy: Math.sin(ba) * 2.5,
+        life: 0.2 + Math.random() * 0.1, color: '#aa66ff'
+      });
+    }
+    return;
+  }
+
+  //---/// PHANTOM: 근접/마법에는 일정 확률로 블링크 회피 ///---
+  if (en.isPhantom && isPlayerAttack && dmgType !== 'bullet' && en._invulnFrame <= 0 && Math.random() < 0.20) {
     let blinked = false;
     for (let t = 0; t < 30; t++) {
       const bx = en.x + (Math.random() - 0.5) * 4;
@@ -2024,7 +2209,7 @@ function applyDamage(en, dmg, isExplosion = false, isPlayerAttack = false) {
         blinked = true; break;
       }
     }
-    if (blinked) { en.hitFlash = 0.5; return; } // 피해 무효
+    if (blinked) { en.hitFlash = 0.5; return; }
   }
 
   //---/// IRONCLAD: 아머가 남아있으면 피해를 아머로 흡수 ///---
@@ -2175,22 +2360,6 @@ function handleEnemyKill(en) {
     if (en.isIronclad && Math.random() < 0.5) items.push(new Item(en.x + 0.5, en.y, 'health'));
   }
 
-  //---/// SCREAMER 사망: 주변 2칸에 일반 적 2마리 소환 ///---
-  if (en.isScreamer) {
-    let spawned = 0;
-    for (let t = 0; t < 60 && spawned < 2; t++) {
-      const sx = en.x + (Math.random() - 0.5) * 4;
-      const sy = en.y + (Math.random() - 0.5) * 4;
-      if (!isWall(sx, sy)) {
-        enemies.push(new Enemy(sx, sy));
-        for (let i = 0; i < 6; i++) {
-          const a2 = Math.random() * Math.PI * 2;
-          cappedPush(particles, PERF_CAP_PARTICLES, { x: sx, y: sy, vx: Math.cos(a2)*3, vy: Math.sin(a2)*3, life: 0.4, color: '#cc4400' });
-        }
-        spawned++;
-      }
-    }
-  }
 
   if (en.compressionTimer > 0 || en._queuedCompression) en._pendingCompressionDrop = true;
 
@@ -2320,20 +2489,19 @@ function applyLightningWithFX(sourceEn, dmg, chain, visited = new Set()) {
   if (!target) return; // 전도될 타겟이 없으면 종료
 
   //---/// 번개 라인 이펙트: source → target 스크린 라인, 0.3초 유지 ///---
-  lightningLines.push({ x1: sourceEn.x, y1: sourceEn.y, x2: target.x, y2: target.y, life: 0.3 });
+  lightningLines.push({ x1: sourceEn.x, y1: sourceEn.y, x2: target.x, y2: target.y, life: 0.3, colorOffset: Math.floor(Math.random() * 3) }); // [최적화] 색상 매 프레임 결정 → 생성 시 1회 결정
 
   target.hitFlash = 1.0;
   //---/// 보스만 즉사 불가 (HP 1 유지), 일반 적은 정상 처치 ///---
   const safeDmg = target.isBoss ? Math.min(dmg, target.hp - 1) : dmg;
   if (safeDmg > 0) {
-    target.hp -= safeDmg;
-    state.totalDamage += safeDmg; // [NEW] 번개 데미지 누적
-    target.state = 'chase';
-    //---/// 라이트닝 연쇄 명중: 라이트닝 재발동 방지 플래그 후 나머지 마법 전부 카운팅 ///---
-    target._skipLightning = true;
-    applyMagicEffects(target);
-    target._skipLightning = false;
-    if (target.hp <= 0) handleEnemyKill(target);
+    applyDamage(target, safeDmg, false, true, 'magic');
+    if (target.hp > 0) {
+      target.state = 'chase';
+      target._skipLightning = true;
+      applyMagicEffects(target);
+      target._skipLightning = false;
+    }
   }
   applyLightningWithFX(target, dmg, chain - 1, visited);
 }
@@ -2452,7 +2620,7 @@ function tryShoot() {
         const falloff = 1 - ed / gun.EXPLODE_RADIUS;
         const splash = Math.floor((calcDmg() + gun.BASE_EXPLODE_DMG_BONUS) * falloff * 0.85);
         //---/// isExplosion=false: 압축·프로즌 증폭 포함, 마법 효과 전부 카운팅 ///---
-        applyDamage(en, splash, false, true);
+        applyDamage(en, splash, false, true, 'bullet');
         applyMagicEffects(en);
       }
     });
@@ -2507,7 +2675,7 @@ function tryShoot() {
         }
         
         if (!blocked) {
-          for (let h = 0; h < hitCount; h++) applyDamage(en, PELLET_DMG, false, true);
+          for (let h = 0; h < hitCount; h++) applyDamage(en, PELLET_DMG, false, true, 'bullet');
           applyMagicEffects(en);
           spawnBlood(en.x, en.y, hitCount);
         }
@@ -2583,7 +2751,7 @@ function tryShoot() {
 
     //---/// 20mm : 베이스 데미지 1.6배로 하향 ///---
     const dmg = gun.CALIBER === '20mm' ? Math.round(calcDmg() * 1.6) : calcDmg();
-    applyDamage(en, dmg, false, true);
+    applyDamage(en, dmg, false, true, 'bullet');
     applyMagicEffects(en);
     //---/// 폭발탄두: 근거리(dist<2) 제외, 벽 통과 시 2칸째부터만 폭발 ///---
     const canExplode = dist >= 2 && (minWallCount === 0 || minWallCount >= 2);
@@ -2624,7 +2792,7 @@ function tryMaceSwing() {
 
         // 부채꼴 시야각 판정
         if (Math.abs(diff) <= mace.cleaveAngle / 2) {
-          applyDamage(en, mace.damage, false, true);
+          applyDamage(en, mace.damage, false, true, 'melee');
           applyMagicEffects(en);
           
           // 바메이스 특유의 으깨버리는 넉백 (벽 체크 포함)
@@ -2688,7 +2856,7 @@ function tryMelee() {
     if (dist < closestDist && Math.abs(diff) < Math.PI / 3) { closestDist = dist; closest = en; }
   });
   if (closest) {
-    applyDamage(closest, Math.floor(MELEE_BASE * gun.MELEE_MULT), false, true);
+    applyDamage(closest, Math.floor(MELEE_BASE * gun.MELEE_MULT), false, true, 'melee');
     applyMagicEffects(closest);
     //---/// 무술:총검술 — 근접 기절 ///---
     if (gun.meleeStunn && closest.hp > 0) { closest.stunTimer = 1.5; closest.hitFlash = 1.0; }
@@ -3004,45 +3172,65 @@ function updateEnemies(dt) {
 
         //---/// 주기적 사격 — 적정거리 밖이면 반드시 빗나감 ///---
         if (canSeePlayer && dist < SHOOT_RANGE) {
-          //---/// 쿨타임 초기값이 0 이하면 최소 대기 부여 (스폰 직후 즉발 방지) ///---
           if (en.attackCooldown <= 0 && !en._shootInitialized) {
             en._shootInitialized = true;
             en.attackCooldown = (en.isSiege ? 2.0 : 2.2) + Math.random() * 1.2;
           }
           en._shootInitialized = true;
-          en.attackCooldown -= dt;
-          const CHARGE_DUR = 0.8;
-          en.chargeTime = en.attackCooldown < CHARGE_DUR ? Math.max(0, 1 - en.attackCooldown / CHARGE_DUR) : 0;
 
-          //---/// SIEGE: 조준선 레이저 업데이트 ///---
           if (en.isSiege) {
             en._aimAngle = ang;
-            en._laserAlpha = en.chargeTime > 0 ? en.chargeTime : 0;
-            // 버스트 발사 처리
-            if (en._burstCount > 0) {
-              en._burstTimer -= dt;
-              if (en._burstTimer <= 0) {
-                en._burstTimer = 0.15;
-                en._burstCount--;
-                const bAmt = (Math.random() - 0.5) * 0.08;
-                cappedPush(enemyBullets, PERF_CAP_ENEMY_BULLETS, { x: en.x, y: en.y, vx: Math.cos(ang + bAmt)*5.5, vy: Math.sin(ang + bAmt)*5.5, life: 4.0, shooter: en });
+
+            if (!en._isCharging) {
+              en.attackCooldown -= dt;
+              en.chargeTime = 0;
+
+              if (en.attackCooldown <= 0) {
+                en._attackMode = Math.random() < 0.5 ? 'charge' : 'shotgun';
+                en._isCharging = true;
+                en._chargeTimer = en._attackMode === 'charge' ? 1.1 : 0.7;
+                en.chargeTime = 1.0;
+                en._laserAlpha = 1.0;
+              }
+            } else {
+              const maxCharge = en._attackMode === 'charge' ? 1.1 : 0.7;
+              en._chargeTimer -= dt;
+              en.chargeTime = Math.max(0, en._chargeTimer / maxCharge);
+              en._laserAlpha = 0.35 + en.chargeTime * 0.65;
+
+              if (en._chargeTimer <= 0) {
+                if (en._attackMode === 'charge') {
+                  cappedPush(enemyBullets, PERF_CAP_ENEMY_BULLETS, {
+                    x: en.x, y: en.y,
+                    vx: Math.cos(ang) * 7.5, vy: Math.sin(ang) * 7.5,
+                    life: 4.2, shooter: en, pierce: 2, siegeCharge: true
+                  });
+                } else {
+                  for (let s = -2; s <= 2; s++) {
+                    const spread = s * 0.11 + (Math.random() - 0.5) * 0.03;
+                    cappedPush(enemyBullets, PERF_CAP_ENEMY_BULLETS, {
+                      x: en.x, y: en.y,
+                      vx: Math.cos(ang + spread) * 5.3, vy: Math.sin(ang + spread) * 5.3,
+                      life: 2.4, shooter: en, siegeShotgun: true
+                    });
+                  }
+                }
+
+                en._isCharging = false;
+                en._laserAlpha = 0;
+                en.chargeTime = 0;
+                en.attackCooldown = 2.3 + Math.random() * 1.1;
               }
             }
-          }
+          } else {
+            en.attackCooldown -= dt;
+            const CHARGE_DUR = 0.8;
+            en.chargeTime = en.attackCooldown < CHARGE_DUR ? Math.max(0, 1 - en.attackCooldown / CHARGE_DUR) : 0;
 
-          if (en.attackCooldown <= 0) {
-            en.attackCooldown = (en.isSiege ? 2.0 : 2.2) + Math.random() * 1.2;
-            en.chargeTime = 0;
-            const atIdealRange = (dist >= RETREAT_DIST && dist <= KEEP_DIST);
-
-            if (en.isSiege) {
-              //---/// SIEGE GUNNER: 버스트 3연발 시작 ///---
-              en._burstCount = 2; // 이번 발 + 2발 더 = 총 3발
-              en._burstTimer = 0.15;
-              const bAmt = atIdealRange ? (Math.random()-0.5)*0.12 : (Math.random()-0.5)*0.25;
-              cappedPush(enemyBullets, PERF_CAP_ENEMY_BULLETS, { x: en.x, y: en.y, vx: Math.cos(ang + bAmt)*5.5, vy: Math.sin(ang + bAmt)*5.5, life: 4.0, shooter: en });
-            } else {
-              //---/// 기존 Shooter 발사 ///---
+            if (en.attackCooldown <= 0) {
+              en.attackCooldown = 2.2 + Math.random() * 1.2;
+              en.chargeTime = 0;
+              const atIdealRange = (dist >= RETREAT_DIST && dist <= KEEP_DIST);
               const missAmt = atIdealRange
                 ? (Math.random() - 0.5) * 0.35
                 : (Math.random() < 0.5 ? 1 : -1) * (0.6 + Math.random() * 0.45);
@@ -3052,7 +3240,10 @@ function updateEnemies(dt) {
           }
         } else {
           en.chargeTime = 0;
-          if (en.isSiege) en._laserAlpha = 0;
+          if (en.isSiege) {
+            en._laserAlpha = 0;
+            en._isCharging = false;
+          }
         }
       } else {
         //---/// 순찰 중 ///---
@@ -3489,43 +3680,31 @@ function updateEnemies(dt) {
 
     //---/// ████ SCREAMER AI ████ ///---
     if (en.isScreamer) {
-      // 외침 타이머 감소
-      en._screechTimer = (en._screechTimer || 0) - dt;
-
-      // 도주 AI: 플레이어가 너무 가까우면 반대 방향으로
       let moveX = 0, moveY = 0;
+
+      if (canSeePlayer) en._activated = true;
+      if (en._activated) {
+        en._summonTimer -= dt;
+        if (en._summonTimer <= 0) {
+          en._summonTimer = en._summonCooldown;
+          en._summonWave = 1.0;
+          let spawned = 0;
+          for (let s = 0; s < 8 && spawned < 2; s++) {
+            if (randomSpawnMonsterByScreamer(en.x, en.y)) spawned++;
+          }
+          sndEnemyHit();
+        }
+      }
+
       if (en.state === 'chase') {
         const FLEE_DIST = 3.5;
         const a2 = Math.atan2(dy, dx);
         if (dist < FLEE_DIST) {
-          // 도망
           moveX = -Math.cos(a2) * enemyScale.speed * 1.1 * dt;
           moveY = -Math.sin(a2) * enemyScale.speed * 1.1 * dt;
         } else {
-          // 적정 거리 유지 (약간 멀리)
           moveX = Math.cos(a2) * enemyScale.speed * 0.3 * dt;
           moveY = Math.sin(a2) * enemyScale.speed * 0.3 * dt;
-        }
-
-        // 외침 발동
-        if (en._screechTimer <= 0 && canSeePlayer) {
-          en._screechTimer = en._screechCooldown;
-          en._screechWave = 1.0;
-          // 반경 6.0 내 모든 적에게 5초 속도버프
-          enemies.forEach(other => {
-            if (!other.active || other.hp <= 0 || other === en || other.isBoss || other.isMerchant) return;
-            if (Math.hypot(other.x - en.x, other.y - en.y) < 6.0) {
-              other._screamBuff = 5.0;
-            }
-          });
-          // 시각 이펙트 (황색 파동)
-          for (let i = 0; i < 20; i++) {
-            const sa = Math.random() * Math.PI * 2;
-            const sd = Math.random() * 3;
-            cappedPush(particles, PERF_CAP_PARTICLES, { x: en.x + Math.cos(sa)*sd, y: en.y + Math.sin(sa)*sd,
-              vx: Math.cos(sa)*4, vy: Math.sin(sa)*4, life: 0.4, color: '#ffcc00' });
-          }
-          sndEnemyHit(); // 외침 사운드 대용
         }
       } else if (en.state === 'patrol') {
         en.patrolTimer -= dt;
@@ -3533,25 +3712,23 @@ function updateEnemies(dt) {
           { en.patrolTarget = randomFreeCell(); en.patrolTimer = 4+Math.random()*4; }
         if (en.patrolTarget) {
           const pdx2=en.patrolTarget.x-en.x, pdy2=en.patrolTarget.y-en.y;
-          if (Math.hypot(pdx2,pdy2)>0.1) { const a2=Math.atan2(pdy2,pdx2); moveX=Math.cos(a2)*enemyScale.speed*0.45*dt; moveY=Math.sin(a2)*enemyScale.speed*0.45*dt; }
+          if (Math.hypot(pdx2,pdy2) > 0.1) { const a2=Math.atan2(pdy2,pdx2); moveX=Math.cos(a2)*enemyScale.speed*0.35*dt; moveY=Math.sin(a2)*enemyScale.speed*0.35*dt; }
         }
       }
-      // 외침 파동 시각 페이드
-      if (en._screechWave > 0) en._screechWave = Math.max(0, en._screechWave - dt * 1.5);
 
       if (moveX !== 0) { const nx=en.x+moveX; if (!isWall(nx+Math.sign(moveX)*ENEMY_RADIUS, en.y+ENEMY_RADIUS) && !isWall(nx+Math.sign(moveX)*ENEMY_RADIUS, en.y-ENEMY_RADIUS)) en.x=nx; else en.patrolTarget=null; }
       if (moveY !== 0) { const ny=en.y+moveY; if (!isWall(en.x+ENEMY_RADIUS, ny+Math.sign(moveY)*ENEMY_RADIUS) && !isWall(en.x-ENEMY_RADIUS, ny+Math.sign(moveY)*ENEMY_RADIUS)) en.y=ny; else en.patrolTarget=null; }
 
-      // 약한 근접 공격 (도주하지만 접촉 시 피해)
-      if (dist < ENEMY_RADIUS + PLAYER_RADIUS + 0.2) {
+      const minDist2 = ENEMY_RADIUS + PLAYER_RADIUS;
+      if (dist < minDist2 + 0.2) {
         if (!en.inContact) { en.attackCooldown = 0; en.inContact = true; }
         en.attackCooldown -= dt;
         if (en.attackCooldown <= 0) {
           en.attackCooldown = enemyScale.atkCooldown * (0.8 + Math.random() * 0.4);
-          const dmg5 = Math.round(enemyScale.dmg * 0.6);
-          const abs5 = Math.min(state.armor, Math.floor(dmg5 / 2));
-          state.armor -= abs5; state.health -= (dmg5 - abs5);
-          damageFlashAlpha = 0.4; sndPlayerHit();
+          const dmg4 = Math.round(enemyScale.dmg * 1.2);
+          const abs4 = Math.min(state.armor, Math.floor(dmg4 / 2));
+          state.armor -= abs4; state.health -= (dmg4 - abs4);
+          damageFlashAlpha = 0.6; sndPlayerHit();
           if (state.health <= 0) { state.health = 0; state.dead = true; } markHUDDirty();
         }
       } else { en.inContact = false; }
@@ -3698,10 +3875,12 @@ function updateEnemyBullets(dt) {
         if (hit || en.hp <= 0) return;
         if (Math.hypot(b.x - en.x, b.y - en.y) < BULLET_RADIUS + 0.323) {
           const rdmg = Math.round(enemyScale.dmg * 2 * gun.MELEE_MULT);
-          applyDamage(en, rdmg, false, true); // isPlayerAttack=true: 킬 보너스·마법 효과 적용
+          applyDamage(en, rdmg, false, true, 'bullet'); // isPlayerAttack=true: 킬 보너스·마법 효과 적용
           applyMagicEffects(en);
           spawnBlood(en.x, en.y, 4);
-          markHUDDirty(); hit = true;
+          markHUDDirty();
+          if (b.pierce > 0) b.pierce--;
+          else hit = true;
         }
       });
       if (hit) continue;
@@ -3727,7 +3906,9 @@ function updateEnemyBullets(dt) {
         const dmg = Math.round(enemyScale.dmg * 0.7);
         applyDamage(en, dmg);
         spawnBlood(en.x, en.y, 3);
-        markHUDDirty(); ffHit = true;
+        markHUDDirty();
+        if (b.pierce > 0) b.pierce--;
+        else ffHit = true;
       }
     });
     if (ffHit) continue;
@@ -3923,9 +4104,83 @@ function drawEnemyBody(en, screenX, spriteTop, spriteH, halfW, hitAlpha, dc) {
     dc.fillRect(x, y, w*0.15, h);
   }
 
+  //---/// 0. BOSS 렌더링 (도감 프리뷰용) ///---
+  if (en.isBoss) {
+    const isP2 = en.phase >= 2;
+    const sc = isP2 ? 1.5 : 1.3;
+    const breathe = 0;        // 도감: 숨쉬기 애니 정지
+    const wingFlap = 0;       // 도감: 날개 퍼덕 정지
+    const bodyC = hitAlpha > 0 ? `rgba(255,100,100,1)` : (isP2 ? '#400' : '#611');
+    const skinC = hitAlpha > 0 ? `rgba(255,200,200,1)` : (isP2 ? '#711' : '#922');
+    const hornC = hitAlpha > 0 ? '#ffaa00' : '#111';
+    const eyeC  = hitAlpha > 0.5 ? '#fff' : (isP2 ? '#ffaa00' : '#ffdd00');
+
+    // 날개
+    dc.fillStyle = isP2 ? '#200' : '#311';
+    const wingSpread = isP2 ? 1.8 : 1.3;
+    dc.beginPath();
+    dc.moveTo(screenX, spriteTop + spriteH*(1 - 0.6*sc));
+    dc.lineTo(screenX - halfW*wingSpread*sc, spriteTop + spriteH*(1 - 1.0*sc) + spriteH*wingFlap);
+    dc.lineTo(screenX - halfW*0.6*sc, spriteTop + spriteH*(1 - 0.3*sc));
+    dc.moveTo(screenX, spriteTop + spriteH*(1 - 0.6*sc));
+    dc.lineTo(screenX + halfW*wingSpread*sc, spriteTop + spriteH*(1 - 1.0*sc) + spriteH*wingFlap);
+    dc.lineTo(screenX + halfW*0.6*sc, spriteTop + spriteH*(1 - 0.3*sc));
+    dc.fill();
+
+    // 뿔
+    dc.strokeStyle = hornC;
+    dc.lineWidth = halfW * 0.25 * sc;
+    dc.lineCap = 'round';
+    dc.beginPath();
+    dc.moveTo(screenX - halfW*0.2*sc, spriteTop + spriteH*(1 - 0.9*sc) - spriteH*breathe);
+    dc.quadraticCurveTo(screenX - halfW*0.8*sc, spriteTop + spriteH*(1 - 1.2*sc) - spriteH*breathe, screenX - halfW*1.0*sc, spriteTop + spriteH*(1 - 0.8*sc) - spriteH*breathe);
+    dc.stroke();
+    dc.beginPath();
+    dc.moveTo(screenX + halfW*0.2*sc, spriteTop + spriteH*(1 - 0.9*sc) - spriteH*breathe);
+    dc.quadraticCurveTo(screenX + halfW*0.8*sc, spriteTop + spriteH*(1 - 1.2*sc) - spriteH*breathe, screenX + halfW*1.0*sc, spriteTop + spriteH*(1 - 0.8*sc) - spriteH*breathe);
+    dc.stroke();
+
+    // 몸통
+    dc.fillStyle = bodyC;
+    dc.fillRect(screenX - halfW*0.7*sc, spriteTop + spriteH*(1 - 0.7*sc) - spriteH*breathe, halfW*1.4*sc, spriteH*0.45*sc);
+    dc.fillStyle = skinC;
+    dc.fillRect(screenX - halfW*0.5*sc, spriteTop + spriteH*(1 - 0.65*sc) - spriteH*breathe, halfW*0.4*sc, spriteH*0.2*sc);
+    dc.fillRect(screenX + halfW*0.1*sc, spriteTop + spriteH*(1 - 0.65*sc) - spriteH*breathe, halfW*0.4*sc, spriteH*0.2*sc);
+
+    // 머리 (180도 회전: dc.scale(-1,1) 후 그리고 복원)
+    dc.save();
+    dc.scale(-1, 1);
+    const fx = -screenX; // 반전된 좌표계에서의 x
+    dc.fillStyle = skinC;
+    dc.fillRect(fx - halfW*0.4*sc, spriteTop + spriteH*(1 - 0.95*sc) - spriteH*breathe, halfW*0.8*sc, spriteH*0.3*sc);
+    dc.fillStyle = eyeC;
+    const eyeY = spriteTop + spriteH*(1 - 0.82*sc) - spriteH*breathe;
+    dc.beginPath();
+    dc.moveTo(fx - halfW*0.3*sc, eyeY - spriteH*0.02);
+    dc.lineTo(fx - halfW*0.05*sc, eyeY + spriteH*0.04);
+    dc.lineTo(fx - halfW*0.2*sc, eyeY + spriteH*0.06);
+    dc.fill();
+    dc.beginPath();
+    dc.moveTo(fx + halfW*0.3*sc, eyeY - spriteH*0.02);
+    dc.lineTo(fx + halfW*0.05*sc, eyeY + spriteH*0.04);
+    dc.lineTo(fx + halfW*0.2*sc, eyeY + spriteH*0.06);
+    dc.fill();
+    dc.restore();
+
+    // 하반신
+    dc.fillStyle = '#111';
+    dc.beginPath();
+    dc.moveTo(screenX - halfW*0.5*sc, spriteTop + spriteH*(1 - 0.25*sc) - spriteH*breathe);
+    dc.lineTo(screenX + halfW*0.5*sc, spriteTop + spriteH*(1 - 0.25*sc) - spriteH*breathe);
+    dc.lineTo(screenX + halfW*0.3*sc, spriteTop + spriteH);
+    dc.lineTo(screenX - halfW*0.3*sc, spriteTop + spriteH);
+    dc.fill();
+    return;
+  }
+
   //---/// 1. BRUTE (브루트) 렌더링 ///---
   if (en.isBrute) {
-    const walkAnim = en.frame === 0 ? spriteH*0.04 : -spriteH*0.04;
+    const walkAnim = en._codexStatic ? 0 : (en.frame === 0 ? spriteH*0.04 : -spriteH*0.04);
     const bodyC = hitAlpha > 0 ? `rgba(255,160,160,1)` : (en._enraged ? '#6a0a00' : '#8B2200');
     const skinC = hitAlpha > 0 ? '#fff' : '#a03010';
     const eyeC  = hitAlpha > 0.5 ? '#fff' : (en._enraged ? '#ffffff' : '#ff4400');
@@ -3984,7 +4239,7 @@ function drawEnemyBody(en, screenX, spriteTop, spriteH, halfW, hitAlpha, dc) {
 
   //---/// 2. PHANTOM (팬텀) 렌더링 ///---
   if (en.isPhantom) {
-    const walkAnim = en.frame === 0 ? spriteH*0.05 : -spriteH*0.05;
+    const walkAnim = en._codexStatic ? 0 : (en.frame === 0 ? spriteH*0.05 : -spriteH*0.05);
     const baseAlpha = en._invulnFrame > 0 ? 0.3 : 0.85;
     dc.globalAlpha = baseAlpha;
     const bodyC = hitAlpha > 0 ? `rgba(255,200,255,1)` : '#1a004a';
@@ -4026,7 +4281,7 @@ function drawEnemyBody(en, screenX, spriteTop, spriteH, halfW, hitAlpha, dc) {
 
   //---/// 3. SCREAMER (스크리머) 렌더링 ///---
   if (en.isScreamer) {
-    const walkAnim = en.frame === 0 ? spriteH*0.05 : -spriteH*0.05;
+    const walkAnim = en._codexStatic ? 0 : (en.frame === 0 ? spriteH*0.05 : -spriteH*0.05);
     const bodyC = hitAlpha > 0 ? `rgba(255,180,160,1)` : '#5a2200';
     const skinC = hitAlpha > 0 ? '#fff' : '#8a4020';
 
@@ -4052,12 +4307,12 @@ function drawEnemyBody(en, screenX, spriteTop, spriteH, halfW, hitAlpha, dc) {
 
     // 거대한 입 & 이빨
     dc.fillStyle = '#000';
-    const mouthOpen = en._screechWave > 0 ? spriteH*0.15 : spriteH*0.05; 
+    const mouthOpen = en._summonWave > 0 ? spriteH*0.15 : spriteH*0.05; 
     dc.fillRect(screenX - halfW*0.25, spriteTop + spriteH*0.3 + walkAnim*0.4, halfW*0.5, mouthOpen);
     dc.fillStyle = '#ddd';
     for(let i=0; i<4; i++) {
        dc.fillRect(screenX - halfW*0.2 + i*halfW*0.12, spriteTop + spriteH*0.3 + walkAnim*0.4, halfW*0.05, spriteH*0.03);
-       if (en._screechWave > 0) dc.fillRect(screenX - halfW*0.2 + i*halfW*0.12, spriteTop + spriteH*0.3 + mouthOpen - spriteH*0.03 + walkAnim*0.4, halfW*0.05, spriteH*0.03);
+       if (en._summonWave > 0) dc.fillRect(screenX - halfW*0.2 + i*halfW*0.12, spriteTop + spriteH*0.3 + mouthOpen - spriteH*0.03 + walkAnim*0.4, halfW*0.05, spriteH*0.03);
     }
 
     // 여러 개의 눈
@@ -4067,10 +4322,10 @@ function drawEnemyBody(en, screenX, spriteTop, spriteH, halfW, hitAlpha, dc) {
     dc.fillRect(screenX - halfW*0.1,  spriteTop + spriteH*0.15 + walkAnim*0.4, halfW*0.08, spriteH*0.04);
     dc.fillRect(screenX + halfW*0.02, spriteTop + spriteH*0.15 + walkAnim*0.4, halfW*0.08, spriteH*0.04);
 
-    if (en._screechWave > 0) {
-      dc.strokeStyle = `rgba(255,200,0,${en._screechWave * 0.8})`;
+    if (en._summonWave > 0) {
+      dc.strokeStyle = `rgba(255,200,0,${en._summonWave * 0.8})`;
       dc.lineWidth = 4;
-      dc.beginPath(); dc.arc(screenX, spriteTop + spriteH*0.35, halfW * (2.5 - en._screechWave * 1.5), 0, Math.PI*2); dc.stroke();
+      dc.beginPath(); dc.arc(screenX, spriteTop + spriteH*0.35, halfW * (2.5 - en._summonWave * 1.5), 0, Math.PI*2); dc.stroke();
     }
 
     // 길고 얇은 팔
@@ -4082,7 +4337,7 @@ function drawEnemyBody(en, screenX, spriteTop, spriteH, halfW, hitAlpha, dc) {
 
   //---/// 4. SIEGE GUNNER 렌더링 ///---
   if (en.isSiege) {
-    const floatY = Math.sin(Date.now() / 200 + en.x) * spriteH * 0.08;
+    const floatY = en._codexStatic ? 0 : Math.sin(Date.now() / 200 + en.x) * spriteH * 0.08;
     const bodyC = hitAlpha > 0 ? `rgba(255,180,150,1)` : '#3a1500';
     const skinC = hitAlpha > 0 ? '#fff' : '#c06030';
     
@@ -4119,7 +4374,7 @@ function drawEnemyBody(en, screenX, spriteTop, spriteH, halfW, hitAlpha, dc) {
     
     // 포구 이펙트
     const orbR = halfW*0.25 + (isCharging ? halfW*0.15 : 0);
-    dc.fillStyle = `rgba(255,100,0,${0.8 + 0.2*Math.sin(Date.now()/120)})`;
+    dc.fillStyle = `rgba(255,100,0,${en._codexStatic ? 0.8 : 0.8 + 0.2*Math.sin(Date.now()/120)})`;
     dc.beginPath(); dc.arc(screenX + halfW*0.55, cannonY + spriteH*0.15, orbR, 0, Math.PI*2); dc.fill();
     dc.fillStyle = '#fff'; dc.beginPath(); dc.arc(screenX + halfW*0.55, cannonY + spriteH*0.15, orbR*0.4, 0, Math.PI*2); dc.fill();
 
@@ -4139,7 +4394,7 @@ function drawEnemyBody(en, screenX, spriteTop, spriteH, halfW, hitAlpha, dc) {
 
   //---/// 5. IRONCLAD 렌더링 ///---
   if (en.isIronclad) {
-    const walkAnim = en.frame === 0 ? spriteH*0.04 : -spriteH*0.04;
+    const walkAnim = en._codexStatic ? 0 : (en.frame === 0 ? spriteH*0.04 : -spriteH*0.04);
     const armorFrac = en.armor > 0 ? (en.armor / en.maxArmor) : 0;
     const bodyC = hitAlpha > 0 ? `rgba(255,170,170,1)` : (en._enraged ? '#7a0000' : '#4a3a2a');
     const skinC = hitAlpha > 0 ? '#fff' : '#6a5040';
@@ -4205,8 +4460,8 @@ function drawEnemyBody(en, screenX, spriteTop, spriteH, halfW, hitAlpha, dc) {
   //---/// 6. 일반 적군 (Shooter & Melee) 렌더링 ///---
   {
     const isShooter = en.isShooter;
-    const floatY = isShooter ? Math.sin(Date.now() / 200 + en.x) * spriteH * 0.08 : 0;
-    const walkAnim = isShooter ? 0 : (en.frame === 0 ? spriteH*0.05 : -spriteH*0.05);
+    const floatY = (isShooter && !en._codexStatic) ? Math.sin(Date.now() / 200 + en.x) * spriteH * 0.08 : 0;
+    const walkAnim = (isShooter || en._codexStatic) ? 0 : (en.frame === 0 ? spriteH*0.05 : -spriteH*0.05);
 
     const bodyC = hitAlpha > 0 ? `rgba(255,180,180,1)` : (isShooter ? '#2a1a4a' : '#4a5a3a');
     const skinC = hitAlpha > 0 ? `rgba(255,255,255,1)` : (isShooter ? '#e0d0f0' : '#6a8a4a');
@@ -4256,7 +4511,7 @@ function drawEnemyBody(en, screenX, spriteTop, spriteH, halfW, hitAlpha, dc) {
       // 가슴 코어
       const isCharging = en.chargeTime && en.chargeTime > 0;
       const orbR = halfW*0.15 + (isCharging ? halfW*0.1 : 0);
-      dc.fillStyle = `rgba(180,80,255,${0.7 + 0.3 * Math.sin(Date.now()/150)})`;
+      dc.fillStyle = `rgba(180,80,255,${en._codexStatic ? 0.7 : 0.7 + 0.3 * Math.sin(Date.now()/150)})`;
       dc.beginPath(); dc.arc(screenX, spriteTop + floatY + spriteH*0.45, orbR, 0, Math.PI*2); dc.fill();
     } else {
       // 양쪽 빛나는 고글 눈
@@ -4273,7 +4528,125 @@ function drawEnemyBody(en, screenX, spriteTop, spriteH, halfW, hitAlpha, dc) {
     }
   }
 }
+function makeCodexDummyEnemy(type) {
+  const base = {
+    active: true,
+    hp: 100,
+    maxHp: 100,
+    hitFlash: 0,
+    frame: 0,
+    frameTimer: 0,
+    stunTimer: 0,
+    frozenTimer: 0,
+    state: 'idle',
+    x: 0,
+    y: 0,
+    isShooter: false,
+    isBoss: false,
+    isMerchant: false,
+    isBrute: false,
+    isPhantom: false,
+    isSiege: false,
+    isScreamer: false,
+    isIronclad: false,
+    _isCharging: false,
+    _laserAlpha: 0,
+    _aimAngle: 0,
+    _codexStatic: true   // 도감 전용: 애니메이션 정지 플래그
+  };
 
+  if (type === 'shooter') {
+    base.isShooter = true;
+  } else if (type === 'brute') {
+    base.isBrute = true;
+  } else if (type === 'phantom') {
+    base.isPhantom = true;
+  } else if (type === 'siege') {
+    base.isShooter = true;
+    base.isSiege = true;
+    base._isCharging = true;
+    base._laserAlpha = 0.9;
+    base._aimAngle = 0;
+  } else if (type === 'screamer') {
+    base.isScreamer = true;
+    base._screechWave = 0.6;
+  } else if (type === 'ironclad') {
+    base.isIronclad = true;
+    base.armor = 40;
+    base.maxArmor = 40;
+    base._crackAlpha = 0.0;
+  } else if (type === 'boss') {
+    base.isBoss = true;
+    base.phase = 2;
+    base.invulnTimer = 0;
+  }
+
+  return base;
+}
+
+function drawEnemySpriteShared(pctx, type, cx, cy, t) {
+  const en = makeCodexDummyEnemy(type);
+  en.frame = 0;       // 도감: 걷기 애니메이션 정지
+  en.hitFlash = 0;
+
+  // 도감 프리뷰용 배경
+  pctx.clearRect(0, 0, 160, 160);
+  const g = pctx.createLinearGradient(0, 0, 0, 160);
+  g.addColorStop(0, '#0e0e0e');
+  g.addColorStop(1, '#1b1b1b');
+  pctx.fillStyle = g;
+  pctx.fillRect(0, 0, 160, 160);
+
+  // 바닥 그림자 (보스는 더 크게)
+  pctx.fillStyle = 'rgba(0,0,0,0.35)';
+  pctx.beginPath();
+  const shadowRx = type === 'boss' ? 44 : 24;
+  const shadowRy = type === 'boss' ? 13 : 8;
+  pctx.ellipse(cx, cy + 38, shadowRx, shadowRy, 0, 0, Math.PI * 2);
+  pctx.fill();
+
+  // 보스는 sc=1.3~1.5 배율로 그리므로 캔버스(160px)에 맞게 크기를 줄임
+  // drawEnemyBody는 dc 파라미터로 pctx를 직접 받으므로 ctx 교체 불필요
+  const spriteH = type === 'boss' ? 52 : 92;
+  const halfW   = type === 'boss' ? 18 : 30;
+  const spriteTop = cy - spriteH * 0.5;
+  drawEnemyBody(en, cx, spriteTop, spriteH, halfW, 0, pctx);
+
+  // Siege Gunner 텔레그래프 프리뷰
+  if (type === 'siege') {
+    pctx.strokeStyle = 'rgba(255,0,0,0.7)';
+    pctx.lineWidth = 2;
+    pctx.beginPath();
+    pctx.moveTo(cx + 18, cy);
+    pctx.lineTo(cx + 56, cy);
+    pctx.stroke();
+  }
+}
+
+let _codexPreviewTimer = null;
+
+function renderCodexPreviews() {
+  const canvases = document.querySelectorAll('.codex-enemy-canvas');
+  if (!canvases.length) return;
+
+  const t = performance.now() * 0.001;
+  canvases.forEach(cv => {
+    const pctx = cv.getContext('2d');
+    drawEnemySpriteShared(pctx, cv.dataset.enemy, 80, 76, t);
+  });
+}
+
+function startCodexPreviewLoop() {
+  stopCodexPreviewLoop();
+  _codexPreviewTimer = setInterval(renderCodexPreviews, 1000 / 20);
+}
+
+function stopCodexPreviewLoop() {
+  if (_codexPreviewTimer) {
+    clearInterval(_codexPreviewTimer);
+    _codexPreviewTimer = null;
+  }
+}
 function renderLightningLines() {
   if (lightningLines.length === 0) return;
 
@@ -4308,7 +4681,7 @@ function renderLightningLines() {
     const pts = [p1];
     const perpX = -(p2.sy - p1.sy), perpY = p2.sx - p1.sx;
     const perpLen = Math.hypot(perpX, perpY) || 1;
-    const colorOffset = Math.floor(Math.random() * BOLT_PALETTE.length);
+    const colorOffset = l.colorOffset; // [최적화] 매 프레임 Math.random() → 생성 시 결정된 값 재사용
     
     for (let i = 1; i < SEG; i++) {
       const t = i / SEG;
@@ -4467,6 +4840,7 @@ function renderExplosionFX(zBuffer) {
 let _screenImgData = null; // 최적화: 전역 이미지 버퍼 재사용
 const _zBuffer = new Float32Array(NUM_RAYS); // 전역 1회 할당으로 GC 방지
 let _cachedBgData = null; // --- [최적화 5단계] 배경 그라데이션 캐싱 배열 ---
+const _damageFlashEl = document.getElementById('damage-flash'); // [최적화] 매 프레임 DOM 탐색 방지
 
 function castRays(bobY) {
   if (!_screenImgData) {
@@ -4520,7 +4894,7 @@ function castRays(bobY) {
     }
     let dist = side===0 ? (mapX - player.x + (1-stepX)/2) / cosA : (mapY - player.y + (1-stepY)/2) / sinA;
           dist = Math.max(0.1, dist); zBuffer[ray] = dist;
-          const corrected = dist * Math.cos(rayAngle - player.angle);
+          const corrected = dist * RAY_COS[ray]; // [최적화] Math.cos(rayAngle - player.angle) → 룩업테이블 재사용
           const wallH = Math.floor((SCREEN_H/corrected)*WALL_SCALE);
           const wallTop = Math.max(0, Math.floor((SCREEN_H-wallH)/2 + bobY)); const wallBottom = Math.min(SCREEN_H, wallTop+wallH);
           
@@ -4733,7 +5107,7 @@ function renderSprites(zBuffer, bobY) {
       if (obj.isUnholyPortal) clipHalfW = Math.floor(halfW * 4.0); 
       if (obj.expansionBombTimer > 0) clipHalfW = Math.floor(halfW * 3.5); 
       if (obj.isBrute) clipHalfW = Math.floor(halfW * 2.0);   // BRUTE: 어깨 스파이크
-      if (obj.isScreamer && obj._screechWave > 0) clipHalfW = Math.floor(halfW * 4.0); // 외침 파동
+      if (obj.isScreamer && obj._summonWave > 0) clipHalfW = Math.floor(halfW * 4.0); // 외침 파동
     } else if (type === 'portal') {
       clipHalfW = Math.floor(halfW * 2.0);
     } else if (type === 'soul') {
@@ -5718,7 +6092,7 @@ function renderPortalBeam() {
 
 function renderDamageFlash(dt) {
   // 1. 기본 피격 화면 깜빡임 처리
-  const el = document.getElementById('damage-flash');
+  const el = _damageFlashEl;
   el.style.background = damageFlashAlpha > 0 ? `rgba(200,0,0,${(damageFlashAlpha * 0.5).toFixed(2)})` : 'transparent';
   damageFlashAlpha = Math.max(0, damageFlashAlpha - dt * 2.5);
 
@@ -6429,6 +6803,43 @@ function renderTelegraphs() {
         ctx.stroke();
      }
   });
+
+  enemies.forEach(en => {
+    if (!en.active || en.hp <= 0 || !en.isSiege || en._laserAlpha <= 0) return;
+
+    const points = [];
+    for (let d = 0.5; d <= 14; d += 0.4) {
+      const wx = en.x + Math.cos(en._aimAngle) * d;
+      const wy = en.y + Math.sin(en._aimAngle) * d;
+      if (isWall(wx, wy)) break;
+
+      const dx = wx - player.x, dy = wy - player.y;
+      let sa = Math.atan2(dy, dx) - player.angle;
+      while (sa > Math.PI) sa -= Math.PI * 2;
+      while (sa < -Math.PI) sa += Math.PI * 2;
+      if (Math.abs(sa) > HALF_FOV + 0.45) continue;
+
+      const dist = Math.hypot(dx, dy);
+      if (dist < 0.1) continue;
+      const corrected = dist * Math.cos(sa);
+      if (corrected <= 0.01) continue;
+
+      const screenX = Math.floor(((sa / FOV) + 0.5) * SCREEN_W);
+      const spriteH = Math.floor((SCREEN_H / corrected) * 0.85);
+      const screenY = Math.floor((SCREEN_H + spriteH) / 2);
+      points.push([screenX, screenY]);
+    }
+
+    if (points.length >= 2) {
+      ctx.beginPath();
+      ctx.strokeStyle = `rgba(255,80,0,${0.18 + en._laserAlpha * 0.55})`;
+      ctx.lineWidth = 3 + en._laserAlpha * 2;
+      ctx.moveTo(points[0][0], points[0][1]);
+      for (let i = 1; i < points.length; i++) ctx.lineTo(points[i][0], points[i][1]);
+      ctx.stroke();
+    }
+  });
+
   ctx.restore();
 }
 
@@ -6454,7 +6865,6 @@ function gameLoop(timestamp) {
   }
 
   const dt = Math.min((timestamp - lastTime) / 1000, 0.05); lastTime = timestamp;
-  _trackFPS(dt);
 
   if (portal) {
     portal.time += dt;
@@ -6510,7 +6920,6 @@ function gameLoop(timestamp) {
   renderMeleeElbow(player.meleeSwing);
   if (currentWeapon === 'gun') renderGun(); 
   else renderMace();
-  renderMeleeElbow(player.meleeSwing);
   renderCrosshair(); 
   renderDamageFlash(dt); 
   renderPortalBeam();
