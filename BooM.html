@@ -23,7 +23,12 @@
   }
 
   #screen-wrap { position: relative; }
-  canvas { display: block; image-rendering: pixelated; }
+  canvas {
+    display: block;
+    width: 1280px;
+    height: 740px;
+    image-rendering: pixelated;
+  }
 
   /* 업그레이드 선택 UI */
   #upgrade-overlay {
@@ -125,7 +130,7 @@
 <body>
 
 <div id="screen-wrap">
-  <canvas id="game" width="1280" height="740"></canvas>
+  <canvas id="game" width="640" height="370"></canvas>
 
   <div id="score-overlay">
     <div class="s-label">STAGE</div>
@@ -511,6 +516,7 @@ function sndPlayerHit() {
 }
 
 function sndEnemyHit() {
+  if (!reserveSfx('low', 90)) return;
   resumeAudio(); const now = getAudioCtx().currentTime; const out = getAudioCtx().destination;
   const osc = getAudioCtx().createOscillator(); const g = getAudioCtx().createGain();
   osc.type = 'square'; osc.frequency.setValueAtTime(300, now); osc.frequency.exponentialRampToValueAtTime(80, now + 0.06);
@@ -534,6 +540,7 @@ function sndDryFire() {
 }
 
 function sndEnemyFootstep() {
+  if (!reserveSfx('low', 130)) return;
   //---/// 몬스터 발소리 — 플레이어 발소리보다 크고 묵직한 톤 ///---
   resumeAudio(); const now = getAudioCtx().currentTime; const out = getAudioCtx().destination;
   const nSrc = getAudioCtx().createBufferSource(); const nG = getAudioCtx().createGain(); const nF = getAudioCtx().createBiquadFilter();
@@ -543,6 +550,7 @@ function sndEnemyFootstep() {
 }
 
 function sndFootstep(fast) {
+  if (!reserveSfx('low', 100)) return;
   resumeAudio(); const now = getAudioCtx().currentTime; const out = getAudioCtx().destination;
   const nSrc = getAudioCtx().createBufferSource(); const nG = getAudioCtx().createGain(); const nF = getAudioCtx().createBiquadFilter();
   nSrc.buffer = makeNoise(0.06); nF.type = 'lowpass'; nF.frequency.value = fast ? 500 : 300;
@@ -550,7 +558,8 @@ function sndFootstep(fast) {
   nSrc.connect(nF); nF.connect(nG); nG.connect(out); nSrc.start(now);
 }
 
-const SCREEN_W = 1280; const SCREEN_H = 740;
+// 내부 렌더 해상도. CSS에서 1280x740으로 2배 확대해 출력합니다.
+const SCREEN_W = 640; const SCREEN_H = 370;
 let MAP_W = 20; let MAP_H = 20;
 const FOV = Math.PI / 3 * 1.2; const HALF_FOV = FOV / 2;
 const NUM_RAYS = 480; const MAX_DEPTH = 20; const WALL_SCALE = 1.0;
@@ -571,6 +580,24 @@ let MOUSE_SENSITIVITY = 0.0005 * 6; // 슬라이더 기본값 6
 //---/// BGM 볼륨 상태 전역 ///---
 let _bgmVol = 0.4;
 let _bgmMuted = false;
+
+//---/// SFX 동시 재생 제한 — 발소리/피격음 과다 생성으로 인한 AudioNode churn 완화 ///---
+const SFX_LIMITS = {
+  low:  { max: 24, active: 0 },
+  high: { max: 48, active: 0 }
+};
+
+function reserveSfx(channel = 'high', ttlMs = 250) {
+  const bucket = SFX_LIMITS[channel] || SFX_LIMITS.high;
+  if (bucket.active >= bucket.max) return false;
+
+  bucket.active++;
+  setTimeout(() => {
+    bucket.active = Math.max(0, bucket.active - 1);
+  }, ttlMs);
+
+  return true;
+}
 
 const enemyScale = { hp: 30, dmg: 5, atkCooldown: 1.2, speed: 1.8 };
 
@@ -1952,7 +1979,7 @@ function initGame() {
   state.upgrades = {};
   applyCaliberStats(); gun.mag = gun.MAG_SIZE - 1; gun.mags = 4; gun.reloading = false; gun.reloadTimer = 0;
   state.health = 100; state.armor = 25; state.maxArmor = 50; state.exp = 0; state.level = 1; state.maxExp = 100;
-  state.score = 0; state.kills = 0; state.totalDamage = 0; state.dead = false; state.stage = 1; state.forceShop = false; state.countdown = 0; state.countdownVal = 0;ownVal = 0;
+  state.score = 0; state.kills = 0; state.totalDamage = 0; state.dead = false; state.stage = 1; state.forceShop = false; state.countdown = 0; state.countdownVal = 0;
   state.upgrading = false; state.paused = false; state.fadeOut = 0; state.fadeAlpha = 0; state.fadeIn = 0.5;
   state.pendingUpgrades = 0; state.bossKilled = false;
   particles = []; explosionFX = []; lightningLines = []; soulFX = []; muzzleFlash = 0; meleeFlash = 0; damageFlashAlpha = 0; mouseDeltaX = 0;
@@ -3997,8 +4024,8 @@ function updateItems(dt) {
         state.score += 25;
       }
       if (it.type === 'armor') {
-        if (state.armor >= 50) { state.score += 120; }
-        else { state.armor = Math.min(50, state.armor + 25); }
+        if (state.armor >= state.maxArmor) { state.score += 120; }
+        else { state.armor = Math.min(state.maxArmor, state.armor + 25); }
         state.score += 20;
       }
       if (it.type === 'ammo') { gun.mags = Math.min(gun.mags + 1, 9); state.score += 15; }
