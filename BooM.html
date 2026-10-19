@@ -3,7 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>BooM.HTML</title>
+<title>BooM — 8비트 서바이벌 슈터</title>
+<meta name="description" content="끝없이 몰려오는 적과 보스를 상대로 살아남는 브라우저 8비트 1인칭 서바이벌 슈터. 레벨업 업그레이드로 총기와 마술을 강화하세요. PC(키보드+마우스) 전용.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="BooM — 8비트 서바이벌 슈터">
+<meta property="og:description" content="몰려오는 적과 보스를 상대로 살아남는 브라우저 8비트 1인칭 서바이벌 슈터. PC(키보드+마우스) 전용.">
+<meta property="og:url" content="https://boom-survival.vercel.app">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%230a0a0a'/%3E%3Ccircle cx='8' cy='9' r='5' fill='%23c00'/%3E%3Crect x='7' y='1' width='2' height='4' fill='%23ff0'/%3E%3Crect x='6' y='7' width='2' height='2' fill='%23ff6'/%3E%3C/svg%3E">
 <style>
   /* 전체 레이아웃 및 UI 스타일 */
   @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
@@ -3131,8 +3137,10 @@ function movePlayer(dt) {
     const PR = 0.238;
     if (!isWall(tx + Math.sign(player.kbVX) * PR, player.y + PR) && !isWall(tx + Math.sign(player.kbVX) * PR, player.y - PR)) player.x = tx;
     if (!isWall(player.x + PR, ty + Math.sign(player.kbVY) * PR) && !isWall(player.x - PR, ty + Math.sign(player.kbVY) * PR)) player.y = ty;
-    player.kbVX *= 0.85; // 멈출 때까지 마찰력 적용
-    player.kbVY *= 0.85;
+    // 멈출 때까지 마찰력 적용 — 60fps 기준 프레임당 0.85를 dt 기반으로 환산 (주사율과 무관하게 동일한 감속)
+    const kbDamp = Math.pow(0.85, dt * 60);
+    player.kbVX *= kbDamp;
+    player.kbVY *= kbDamp;
   }
   const fast = keys['ShiftLeft'] || keys['ShiftRight'] ? 1.8 : 1.0;
   const spd = 3.5 * fast * dt; const tspd = 2.2 * dt;
@@ -4278,7 +4286,6 @@ const ParticlePool = {
   }
 };
 
-const MAX_PARTICLES = 500; // [핵심 최적화] 파티클 상한 — 초과 시 오래된 것(앞쪽)부터 드롭
 function updateParticles(dt) {
   let keepCount = 0;
   for (let i = 0; i < particles.length; i++) {
@@ -4297,9 +4304,9 @@ function updateParticles(dt) {
     }
   }
   particles.length = keepCount;
-  // 상한 초과 시 수명이 가장 짧은(오래된) 파티클 앞쪽부터 드롭
-  if (particles.length > MAX_PARTICLES) {
-    const drop = particles.length - MAX_PARTICLES;
+  // 상한 초과 시 오래된(앞쪽) 파티클부터 드롭 — 상한은 cappedPush 와 같은 PERF_CAP_PARTICLES 하나로 통일
+  if (particles.length > PERF_CAP_PARTICLES) {
+    const drop = particles.length - PERF_CAP_PARTICLES;
     for (let i = 0; i < drop; i++) ParticlePool.release(particles[i]);
     particles.splice(0, drop);
   }
