@@ -1806,15 +1806,14 @@ function isWall(x, y) {
 
 function isStuck() {
   //---/// 플레이어 중심 기준 4방향 + 4대각 모두 벽이면 끼임 판정 ///---
-  const r = 0.18;
-  const checks = [
-    [player.x + r, player.y], [player.x - r, player.y],
-    [player.x, player.y + r], [player.x, player.y - r],
-    [player.x + r, player.y + r], [player.x - r, player.y + r],
-    [player.x + r, player.y - r], [player.x - r, player.y - r],
-  ];
-  return checks.filter(([x, y]) => isWall(x, y)).length >= 4;
+  // [최적화] 매 프레임 호출 — 좌표 배열·filter 클로저 생성 없이 상수 오프셋 테이블로 카운트
+  const offs = _STUCK_OFFS_PLAYER;
+  let count = 0;
+  for (let i = 0; i < 16; i += 2) if (isWall(player.x + offs[i], player.y + offs[i + 1])) count++;
+  return count >= 4;
 }
+const _STUCK_OFFS_PLAYER = new Float64Array([0.18,0, -0.18,0, 0,0.18, 0,-0.18, 0.18,0.18, -0.18,0.18, 0.18,-0.18, -0.18,-0.18]);
+const _STUCK_OFFS_ENEMY  = new Float64Array([0.2,0, -0.2,0, 0,0.2, 0,-0.2, 0.2,0.2, -0.2,0.2, 0.2,-0.2, -0.2,-0.2]);
 
 function teleportToNearestRoom() {
   //---/// currentRooms 중 가장 가까운 방 중심으로 텔레포트 ///---
@@ -3092,9 +3091,10 @@ function updateEnemies(dt) {
     en.hitFlash = Math.max(0, en.hitFlash - dt * 6);
     //---/// 끼인 적 자동 재배치 — 8방향 모두 벽이면 가장 가까운 방 중심으로 이동 ///---
     if (!en.isBoss) {
-      const r = 0.2;
-      const dirs = [[r,0],[-r,0],[0,r],[0,-r],[r,r],[-r,r],[r,-r],[-r,-r]];
-      const wallCount = dirs.filter(([dx2,dy2]) => isWall(en.x+dx2, en.y+dy2)).length;
+      // [최적화] 적마다 매 프레임 생성되던 8개 배열 + filter 클로저 제거 (판정 동일)
+      const offs = _STUCK_OFFS_ENEMY;
+      let wallCount = 0;
+      for (let k = 0; k < 16; k += 2) if (isWall(en.x + offs[k], en.y + offs[k + 1])) wallCount++;
       if (wallCount >= 6 && currentRooms && currentRooms.length > 0) {
         let best = null, bestD = Infinity;
         currentRooms.forEach(rm => {
@@ -3837,7 +3837,10 @@ function updateEnemies(dt) {
       for (let tx = enTileX - 1; tx <= enTileX + 1; tx++) {
         if (tx < 0 || ty < 0 || tx >= MAP_W || ty >= MAP_H || !currentMap[ty][tx]) continue;
         const nearX = Math.max(tx, Math.min(tx + 1, en.x)), nearY = Math.max(ty, Math.min(ty + 1, en.y));
-        const odx = en.x - nearX, ody = en.y - nearY; const od = Math.hypot(odx, ody);
+        const odx = en.x - nearX, ody = en.y - nearY;
+        // [최적화] 축 거리만으로 반경 밖이 확실하면 hypot 생략 (hypot ≥ max(|dx|,|dy|) 이므로 결과 동일)
+        if (odx >= ENEMY_RADIUS || odx <= -ENEMY_RADIUS || ody >= ENEMY_RADIUS || ody <= -ENEMY_RADIUS) continue;
+        const od = Math.hypot(odx, ody);
         if (od < ENEMY_RADIUS && od > 0.0001) { const push = (ENEMY_RADIUS - od) / od; en.x += odx * push; en.y += ody * push; }
       }
     }
@@ -3868,18 +3871,46 @@ function updateEnemies(dt) {
       en.inContact = false; // 접촉 해제 — 다음 접촉 시 다시 즉시 공격
     }
   });
+  separateEnemies(ENEMY_RADIUS);
+}
+
+//---/// [최적화] 적끼리 겹침 해소 — 거대한 updateEnemies 밖으로 분리 ///---
+// 적 배열은 여러 클래스가 섞여 있어(megamorphic) 쌍마다 en.x/en.y를 읽으면 숫자 박싱 할당이 대량 발생.
+// 살아있는 적 좌표를 Float64Array에 1회 복사해 쌍 계산 후, 바뀐 적만 되돌려 씀. 순회 순서·연산이 같아 결과 동일.
+let _sepX = new Float64Array(64), _sepY = new Float64Array(64);
+let _sepIdx = new Int32Array(64), _sepDirty = new Uint8Array(64);
+function separateEnemies(ENEMY_RADIUS) {
   const MIN_EN = ENEMY_RADIUS * 2;
-  for (let i = 0; i < enemies.length; i++) {
-    if (enemies[i].hp <= 0) continue;
-    for (let j = i + 1; j < enemies.length; j++) {
-      if (enemies[j].hp <= 0) continue;
-      const ex = enemies[j].x - enemies[i].x, ey = enemies[j].y - enemies[i].y; const ed = Math.hypot(ex, ey);
+  const list = enemies;
+  if (_sepX.length < list.length) {
+    const cap = Math.max(list.length, _sepX.length * 2);
+    _sepX = new Float64Array(cap); _sepY = new Float64Array(cap); _sepIdx = new Int32Array(cap); _sepDirty = new Uint8Array(cap);
+  }
+  const X = _sepX, Y = _sepY, dirty = _sepDirty;
+  let n = 0;
+  for (let i = 0; i < list.length; i++) {
+    const en = list[i];
+    if (en.hp <= 0) continue;
+    _sepIdx[n] = i; X[n] = en.x; Y[n] = en.y; dirty[n] = 0; n++;
+  }
+  for (let a = 0; a < n; a++) {
+    for (let b = a + 1; b < n; b++) {
+      const ex = X[b] - X[a], ey = Y[b] - Y[a];
+      // 축 거리로 먼저 걸러 대부분의 쌍에서 hypot 생략 (hypot ≥ max(|dx|,|dy|) 이므로 결과 동일)
+      if (ex >= MIN_EN || ex <= -MIN_EN || ey >= MIN_EN || ey <= -MIN_EN) continue;
+      const ed = Math.hypot(ex, ey);
       if (ed < MIN_EN && ed > 0.001) {
         const push = (MIN_EN - ed) / ed * 0.5; const px = ex * push, py = ey * push;
-        if (!isWall(enemies[i].x - px, enemies[i].y)) enemies[i].x -= px; if (!isWall(enemies[i].x, enemies[i].y - py)) enemies[i].y -= py;
-        if (!isWall(enemies[j].x + px, enemies[j].y)) enemies[j].x += px; if (!isWall(enemies[j].x, enemies[j].y + py)) enemies[j].y += py;
+        if (!isWall(X[a] - px, Y[a])) X[a] -= px; if (!isWall(X[a], Y[a] - py)) Y[a] -= py;
+        if (!isWall(X[b] + px, Y[b])) X[b] += px; if (!isWall(X[b], Y[b] + py)) Y[b] += py;
+        dirty[a] = 1; dirty[b] = 1;
       }
     }
+  }
+  for (let a = 0; a < n; a++) {
+    if (!dirty[a]) continue;
+    const en = list[_sepIdx[a]];
+    en.x = X[a]; en.y = Y[a];
   }
 }
 
@@ -3898,9 +3929,14 @@ function updateEnemyBullets(dt) {
     
     if (b.reflected) {
       let hit = false;
-      enemies.forEach(en => {
-        if (hit || en.hp <= 0) return;
-        if (Math.hypot(b.x - en.x, b.y - en.y) < BULLET_RADIUS + 0.323) {
+      // [최적화] 총알마다 forEach 클로저 생성 제거 — 순회 시작 시점의 배열/길이를 고정해 forEach와 동일하게 동작
+      const ens = enemies, nEn = ens.length;
+      for (let k = 0; k < nEn; k++) {
+        const en = ens[k];
+        if (hit || en.hp <= 0) continue;
+        const ddx = b.x - en.x, ddy = b.y - en.y, rr = BULLET_RADIUS + 0.323;
+        if (ddx >= rr || ddx <= -rr || ddy >= rr || ddy <= -rr) continue;
+        if (Math.hypot(ddx, ddy) < rr) {
           const rdmg = Math.round(enemyScale.dmg * 2 * gun.MELEE_MULT);
           applyDamage(en, rdmg, false, true, 'bullet'); // isPlayerAttack=true: 킬 보너스·마법 효과 적용
           applyMagicEffects(en);
@@ -3909,7 +3945,7 @@ function updateEnemyBullets(dt) {
           if (b.pierce > 0) b.pierce--;
           else hit = true;
         }
-      });
+      }
       if (hit) continue;
     }
     
@@ -3927,9 +3963,13 @@ function updateEnemyBullets(dt) {
     }
     
     let ffHit = false;
-    enemies.forEach(en => {
-      if (ffHit || en.hp <= 0 || en === b.shooter) return;
-      if (Math.hypot(b.x - en.x, b.y - en.y) < BULLET_RADIUS + 0.323) {
+    const ens2 = enemies, nEn2 = ens2.length;
+    for (let k = 0; k < nEn2; k++) {
+      const en = ens2[k];
+      if (ffHit || en.hp <= 0 || en === b.shooter) continue;
+      const ddx = b.x - en.x, ddy = b.y - en.y, rr = BULLET_RADIUS + 0.323;
+      if (ddx >= rr || ddx <= -rr || ddy >= rr || ddy <= -rr) continue;
+      if (Math.hypot(ddx, ddy) < rr) {
         const dmg = Math.round(enemyScale.dmg * 0.7);
         applyDamage(en, dmg);
         spawnBlood(en.x, en.y, 3);
@@ -3937,7 +3977,7 @@ function updateEnemyBullets(dt) {
         if (b.pierce > 0) b.pierce--;
         else ffHit = true;
       }
-    });
+    }
     if (ffHit) continue;
     
     // 조건에 맞는 경우만 배열 앞쪽으로 옮겨 덮어쓰기
@@ -4865,16 +4905,41 @@ function renderExplosionFX(zBuffer) {
 }
 
 let _screenImgData = null; // 최적화: 전역 이미지 버퍼 재사용
+let _screenU32 = null;      // [최적화] ImageData 버퍼의 32bit 뷰 — 픽셀당 4회 → 1회 쓰기
 const _zBuffer = new Float32Array(NUM_RAYS); // 전역 1회 할당으로 GC 방지
-let _cachedBgData = null; // --- [최적화 5단계] 배경 그라데이션 캐싱 배열 ---
+let _cachedBgData = null; // --- [최적화 5단계] 배경 그라데이션 캐싱 배열 (32bit) ---
 const _damageFlashEl = document.getElementById('damage-flash'); // [최적화] 매 프레임 DOM 탐색 방지
+let _lastDamageFlashBg = '';
+const _IS_LITTLE_ENDIAN = new Uint8Array(new Uint32Array([0x0a0b0c0d]).buffer)[0] === 0x0d;
+function packRGBA(r, g, b) {
+  return _IS_LITTLE_ENDIAN ? ((255 << 24) | (b << 16) | (g << 8) | r) >>> 0 : ((r << 24) | (g << 16) | (b << 8) | 255) >>> 0;
+}
+//---/// [최적화] 벽 텍스처 64x64를 32bit 픽셀 배열로 변환 (side 음영 포함 2종) — 최초 1회 ///---
+const _wallTexU32 = {};
+function getWallTexU32(wallType) {
+  let t = _wallTexU32[wallType];
+  if (t) return t;
+  const texData = wallTextures[wallType] || wallTextures[1];
+  const lit = new Uint32Array(64 * 64 * 3), dark = new Uint32Array(64 * 64 * 3);
+  // 채널별 원본값(0~255) 저장: [r,g,b] 순서 — 안개 계산은 레이마다 다르므로 컬럼 단위로 적용
+  for (let i = 0; i < 64 * 64; i++) {
+    const r = texData[i * 4], g = texData[i * 4 + 1], b = texData[i * 4 + 2];
+    lit[i * 3] = r; lit[i * 3 + 1] = g; lit[i * 3 + 2] = b;
+    dark[i * 3] = Math.floor(r * 0.65); dark[i * 3 + 1] = Math.floor(g * 0.65); dark[i * 3 + 2] = Math.floor(b * 0.65);
+  }
+  t = { lit, dark };
+  _wallTexU32[wallType] = t;
+  return t;
+}
+const _colU32 = new Uint32Array(64); // 레이 1개의 안개 적용된 텍스처 세로줄 (재사용 버퍼)
 
 function castRays(bobY) {
   if (!_screenImgData) {
     _screenImgData = ctx.createImageData(SCREEN_W, SCREEN_H);
+    _screenU32 = new Uint32Array(_screenImgData.data.buffer);
     
-    // --- [최적화 5단계] 94만 픽셀짜리 천장/바닥을 최초 1회만 연산하여 메모리에 구워버립니다 ---
-    _cachedBgData = new Uint8ClampedArray(SCREEN_W * SCREEN_H * 4);
+    // --- [최적화 5단계] 천장/바닥 그라데이션을 최초 1회만 연산하여 메모리에 구워버립니다 ---
+    _cachedBgData = new Uint32Array(SCREEN_W * SCREEN_H);
     for (let y = 0; y < SCREEN_H; y++) {
       let r, g, b;
       if (y < SCREEN_H / 2) {
@@ -4883,26 +4948,22 @@ function castRays(bobY) {
       } else {
         const t = (y - SCREEN_H / 2) / (SCREEN_H / 2); r = Math.floor(26 + t*16); g = Math.floor(t*4); b = 0;
       }
-      for (let x = 0; x < SCREEN_W; x++) { 
-        const i = (y * SCREEN_W + x) * 4; 
-        _cachedBgData[i] = r; _cachedBgData[i+1] = g; _cachedBgData[i+2] = b; _cachedBgData[i+3] = 255; 
-      }
+      _cachedBgData.fill(packRGBA(r, g, b), y * SCREEN_W, (y + 1) * SCREEN_W);
     }
   }
   
   const imgData = _screenImgData; 
-  const data = imgData.data; 
+  const buf = _screenU32;
   const zBuffer = _zBuffer;
+  const col = _colU32;
 
-  // --- [최적화 5단계] 매 프레임 돌던 이중 루프 대신, C언어급 속도의 메모리 복사 단 1줄로 덮어쓰기! ---
-  data.set(_cachedBgData);
+  // --- [최적화 5단계] 매 프레임 돌던 이중 루프 대신 메모리 복사 1줄로 덮어쓰기 ---
+  buf.set(_cachedBgData);
 
   const pCos = Math.cos(player.angle);
   const pSin = Math.sin(player.angle);
 
   for (let ray = 0; ray < NUM_RAYS; ray++) {
-    const rayAngle = player.angle + RAY_ANGLES[ray];
-    
     // --- [최적화 6단계] 삼각함수 덧셈정리를 활용하여 고비용 Math.cos/sin 완전 제거! ---
     // cos(a+b) = cos(a)cos(b) - sin(a)sin(b)
     const cosA = pCos * RAY_COS[ray] - pSin * RAY_SIN[ray];
@@ -4920,59 +4981,74 @@ function castRays(bobY) {
       if (currentMap[mapY][mapX]) { wallType=currentMap[mapY][mapX]; hit=true; }
     }
     let dist = side===0 ? (mapX - player.x + (1-stepX)/2) / cosA : (mapY - player.y + (1-stepY)/2) / sinA;
-          dist = Math.max(0.1, dist); zBuffer[ray] = dist;
-          const corrected = dist * RAY_COS[ray]; // [최적화] Math.cos(rayAngle - player.angle) → 룩업테이블 재사용
-          const wallH = Math.floor((SCREEN_H/corrected)*WALL_SCALE);
-          const wallTop = Math.max(0, Math.floor((SCREEN_H-wallH)/2 + bobY)); const wallBottom = Math.min(SCREEN_H, wallTop+wallH);
-          
-          // [수정됨] 텍스처 픽셀 매핑 로직
-          const fog = Math.max(0, 1-dist/MAX_DEPTH);
-          const screenX0 = Math.round(ray * SCREEN_W / NUM_RAYS); 
-          const screenX1 = Math.round((ray + 1) * SCREEN_W / NUM_RAYS);
-          
-          const texData = wallTextures[wallType] || wallTextures[1];
-          
-          // 벽의 정확한 X 타격점 계산 (텍스처의 가로 좌표 0~63 추출)
-          let exactHit;
-          if (side === 0) exactHit = player.y + dist * sinA;
-          else            exactHit = player.x + dist * cosA;
-          exactHit -= Math.floor(exactHit); 
-          let texX = Math.floor(exactHit * 64);
-          // 방향에 따라 텍스처가 뒤집혀 보이지 않도록 보정
-          if (side === 0 && cosA > 0) texX = 63 - texX; 
-          if (side === 1 && sinA < 0) texX = 63 - texX;
-          
-          const texStep = 64.0 / wallH;
-          // 화면 밖으로 잘린 천장 부분만큼 텍스처의 시작 Y 좌표를 내려줌
-          let texPos = (wallTop - ((SCREEN_H - wallH) / 2 + bobY)) * texStep;
+    dist = Math.max(0.1, dist); zBuffer[ray] = dist;
+    const corrected = dist * RAY_COS[ray]; // [최적화] Math.cos(rayAngle - player.angle) → 룩업테이블 재사용
+    const wallH = Math.floor((SCREEN_H/corrected)*WALL_SCALE);
+    const wallTop = Math.max(0, Math.floor((SCREEN_H-wallH)/2 + bobY)); const wallBottom = Math.min(SCREEN_H, wallTop+wallH);
+    
+    // [수정됨] 텍스처 픽셀 매핑 로직
+    const fog = Math.max(0, 1-dist/MAX_DEPTH);
+    const screenX0 = Math.round(ray * SCREEN_W / NUM_RAYS); 
+    const screenX1 = Math.round((ray + 1) * SCREEN_W / NUM_RAYS);
+    if (wallBottom <= wallTop || screenX1 <= screenX0) continue;
+    
+    // 벽의 정확한 X 타격점 계산 (텍스처의 가로 좌표 0~63 추출)
+    let exactHit;
+    if (side === 0) exactHit = player.y + dist * sinA;
+    else            exactHit = player.x + dist * cosA;
+    exactHit -= Math.floor(exactHit); 
+    let texX = Math.floor(exactHit * 64);
+    // 방향에 따라 텍스처가 뒤집혀 보이지 않도록 보정
+    if (side === 0 && cosA > 0) texX = 63 - texX; 
+    if (side === 1 && sinA < 0) texX = 63 - texX;
 
-          for (let y = wallTop; y < wallBottom; y++) {
-            let texY = Math.floor(texPos) & 63; // 비트연산으로 0~63 제한
-            texPos += texStep;
-            
-            // 텍스처 배열에서 R, G, B 뽑아오기
-            const texIdx = (texY * 64 + texX) * 4;
-            let tr = texData[texIdx];
-            let tg = texData[texIdx+1];
-            let tb = texData[texIdx+2];
-            
-            // 빛을 받지 않는 벽면(side === 1)은 살짝 어둡게 처리
-            if (side === 1) { 
-              tr = Math.floor(tr * 0.65); tg = Math.floor(tg * 0.65); tb = Math.floor(tb * 0.65); 
-            }
-            
-            // 안개(거리 음영) 적용
-            const fr = Math.floor(tr * fog), fg2 = Math.floor(tg * fog), fb = Math.floor(tb * fog);
-            
-            // [최적화] 행 시작 인덱스를 미리 계산해 px 루프 내 곱셈 횟수 감소
-            const rowBase = (y * SCREEN_W + screenX0) * 4;
-            for (let px = screenX0; px < screenX1; px++) {
-              const i = rowBase + (px - screenX0) * 4; 
-              data[i] = fr; data[i+1] = fg2; data[i+2] = fb; data[i+3] = 255;
-            }
-          }
+    // [최적화] 이 레이가 쓰는 텍스처 세로줄 64픽셀에 음영(side)·안개(fog)를 미리 적용
+    // (픽셀마다 반복하던 Math.floor 6회 + 4바이트 쓰기 → 텍셀당 1회 계산 + 32bit 1회 쓰기)
+    const tex = getWallTexU32(wallType);
+    const src = side === 1 ? tex.dark : tex.lit;
+    if (_IS_LITTLE_ENDIAN) {
+      for (let ty = 0, si = texX * 3; ty < 64; ty++, si += 192) {
+        col[ty] = (0xff000000 | (Math.floor(src[si + 2] * fog) << 16) | (Math.floor(src[si + 1] * fog) << 8) | Math.floor(src[si] * fog)) >>> 0;
+      }
+    } else {
+      for (let ty = 0, si = texX * 3; ty < 64; ty++, si += 192) {
+        col[ty] = packRGBA(Math.floor(src[si] * fog), Math.floor(src[si + 1] * fog), Math.floor(src[si + 2] * fog));
+      }
+    }
+    
+    const texStep = 64.0 / wallH;
+    // 화면 밖으로 잘린 천장 부분만큼 텍스처의 시작 Y 좌표를 내려줌
+    let texPos = (wallTop - ((SCREEN_H - wallH) / 2 + bobY)) * texStep;
+    const colW = screenX1 - screenX0;
+
+    let rowBase = wallTop * SCREEN_W + screenX0;
+    if (colW === 1) {
+      for (let y = wallTop; y < wallBottom; y++) {
+        buf[rowBase] = col[Math.floor(texPos) & 63]; // 비트연산으로 0~63 제한
+        texPos += texStep; rowBase += SCREEN_W;
+      }
+    } else {
+      for (let y = wallTop; y < wallBottom; y++) {
+        const c = col[Math.floor(texPos) & 63];
+        texPos += texStep;
+        // 좁은 컬럼은 TypedArray.fill 호출 비용이 더 커서 직접 루프
+        for (let i = rowBase, e = rowBase + colW; i < e; i++) buf[i] = c;
+        rowBase += SCREEN_W;
+      }
+    }
   }
   ctx.putImageData(imgData, 0, 0); return zBuffer;
+}
+
+//---/// [최적화] 화면 X(px) → 레이 인덱스 룩업 (스프라이트 클리핑 루프의 px당 round/min/max 제거) ///---
+let _pxToRayTable = null, _pxToRayW = 0, _pxToRayN = 0;
+function getPxToRayTable() {
+  if (!_pxToRayTable || _pxToRayW !== SCREEN_W || _pxToRayN !== NUM_RAYS) {
+    _pxToRayTable = new Int32Array(SCREEN_W + 1);
+    for (let px = 0; px <= SCREEN_W; px++) _pxToRayTable[px] = Math.min(NUM_RAYS - 1, Math.max(0, Math.round(px * NUM_RAYS / SCREEN_W)));
+    _pxToRayW = SCREEN_W; _pxToRayN = NUM_RAYS;
+  }
+  return _pxToRayTable;
 }
 
 const _spritesPool = [];
@@ -5148,9 +5224,9 @@ function renderSprites(zBuffer, bobY) {
     // 넓어진 clipHalfW를 기반으로 픽셀을 그립니다.
     const startPx = Math.max(0, screenX - clipHalfW);
     const endPx = Math.min(SCREEN_W, screenX + clipHalfW);
+    const pxToRay = getPxToRayTable();
     for (let px = startPx; px <= endPx; px++) {
-      const ri = Math.min(NUM_RAYS - 1, Math.max(0, Math.round(px * NUM_RAYS / SCREEN_W)));
-      const isVis = (px < SCREEN_W && corrected < zBuffer[ri]);
+      const isVis = (px < SCREEN_W && corrected < zBuffer[pxToRay[px]]);
       
       if (isVis) {
         if (startX === -1) startX = px; 
@@ -5286,7 +5362,7 @@ function renderSprites(zBuffer, bobY) {
 
         if (en.dialogueTimer > 0) {
           ctx.save();
-          ctx.font = `bold ${Math.max(12, halfW * 0.15)}px Share Tech Mono`;
+          ctx.font = `bold ${Math.round(Math.max(12, halfW * 0.15) * 2) / 2}px Share Tech Mono`; // [최적화] 0.5px 단위 반올림 — 폰트/셰이핑 캐시 적중
           ctx.textAlign = 'center';
           ctx.fillStyle = '#00ffff';
           ctx.shadowColor = '#0055ff'; ctx.shadowBlur = 8;
@@ -5487,7 +5563,7 @@ function renderSprites(zBuffer, bobY) {
         ctx.fillStyle = barColor; ctx.fillRect(screenX-halfW*1.2, barY, halfW*2.4*hpPct, 8);
         ctx.strokeStyle='#800'; ctx.lineWidth=1; ctx.strokeRect(screenX-halfW*1.2, barY, halfW*2.4, 8);
         if (invuln) { ctx.fillStyle=`rgba(255,80,0,${0.4+Math.sin(Date.now()/100)*0.3})`; ctx.fillRect(screenX-halfW*1.2, barY, halfW*2.4, 8); }
-        ctx.fillStyle = '#fff'; ctx.font = `bold ${Math.max(9,halfW*0.18)}px Share Tech Mono`; ctx.textAlign='center';
+        ctx.fillStyle = '#fff'; ctx.font = `bold ${Math.round(Math.max(9,halfW*0.18) * 2) / 2}px Share Tech Mono`; ctx.textAlign='center';
         ctx.fillText(`PHASE ${en.phase}${invuln?' [INVULN]':''}`, screenX, barY - 8);
       }
       // [복구됨] 일반 몬스터 처리를 위한 else 블록 복원!
@@ -5556,7 +5632,7 @@ function renderSprites(zBuffer, bobY) {
             const variantName = en.isBrute ? '▲ BRUTE' : en.isPhantom ? '◈ PHANTOM' : en.isSiege ? '⊕ SIEGE' : en.isScreamer ? '◉ SCREAMER' : '⬡ IRONCLAD';
             const variantColor = en.isBrute ? '#ff6622' : en.isPhantom ? '#cc66ff' : en.isSiege ? '#ff8800' : en.isScreamer ? '#ffcc00' : '#80ccff';
             ctx.save();
-            ctx.font = `bold ${Math.max(8, halfW*0.16)}px Share Tech Mono`;
+            ctx.font = `bold ${Math.round(Math.max(8, halfW*0.16) * 2) / 2}px Share Tech Mono`; // [최적화] 0.5px 단위 반올림 — 매 프레임 새 폰트 생성/텍스트 셰이핑 방지
             ctx.textAlign = 'center';
             ctx.fillStyle = variantColor;
             ctx.shadowColor = '#000'; ctx.shadowBlur = 4;
@@ -6120,7 +6196,9 @@ function renderPortalBeam() {
 function renderDamageFlash(dt) {
   // 1. 기본 피격 화면 깜빡임 처리
   const el = _damageFlashEl;
-  el.style.background = damageFlashAlpha > 0 ? `rgba(200,0,0,${(damageFlashAlpha * 0.5).toFixed(2)})` : 'transparent';
+  // [최적화] 값이 바뀔 때만 DOM 스타일 기록 (매 프레임 style 쓰기 → 스타일 재계산 방지)
+  const flashBg = damageFlashAlpha > 0 ? `rgba(200,0,0,${(damageFlashAlpha * 0.5).toFixed(2)})` : 'transparent';
+  if (flashBg !== _lastDamageFlashBg) { el.style.background = flashBg; _lastDamageFlashBg = flashBg; }
   damageFlashAlpha = Math.max(0, damageFlashAlpha - dt * 2.5);
 
   // 2. 벽에 끼었을 때(Stuck) 주황색 테두리 경고 처리
@@ -6769,7 +6847,7 @@ function renderEnemyRadar(zBuffer) {
     ctx.moveTo(screenX, centerY - sz * 0.8); ctx.lineTo(screenX, centerY + sz * 0.8);
     ctx.stroke();
     
-    ctx.font = `bold ${Math.max(10, sz * 0.7)}px Share Tech Mono`;
+    ctx.font = `bold ${Math.round(Math.max(10, sz * 0.7) * 2) / 2}px Share Tech Mono`;
     ctx.fillStyle = radarColor;
     ctx.shadowBlur = 4;
     ctx.fillText(dist.toFixed(1), screenX, centerY + sz * 1.4);
