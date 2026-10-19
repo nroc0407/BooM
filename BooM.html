@@ -1669,7 +1669,13 @@ function applyUpgradeSelection(up, options = {}) {
   return true;
 }
 
+//---/// 디버그 메뉴는 ?debug=1 URL 플래그가 있을 때만 활성화 ///---
+const DEBUG_MODE = (() => {
+  try { return new URLSearchParams(window.location.search).get('debug') === '1'; } catch (e) { return false; }
+})();
+
 function toggleDebugUpgradeOverlay() {
+  if (!DEBUG_MODE) return;
   const existing = document.getElementById('debug-upgrade-overlay');
   if (existing) {
     existing.remove();
@@ -1776,7 +1782,7 @@ function handleKeyDown(e) {
     return;
   }
 
-  if (e.code === 'KeyP') {
+  if (e.code === 'KeyP' && DEBUG_MODE) {
     toggleDebugUpgradeOverlay();
     return;
   }
@@ -1828,7 +1834,7 @@ function showPauseOverlay() {
       <b style="color:#fff">W / A / S / D</b> 이동 &nbsp;|&nbsp; <b style="color:#fff">마우스</b> 시점 전환<br>
       <b style="color:#fff">좌클릭</b> 발사 &nbsp;|&nbsp; <b style="color:#fff">우클릭</b> 근접 공격<br>
       <b style="color:#fff">SPACE</b> 대쉬 &nbsp;|&nbsp; <b style="color:#fff">SHIFT</b> 달리기 &nbsp;|&nbsp; <b style="color:#fff">R</b> 재장전<br>
-      <b style="color:#fff">E</b> 오브젝트 상호작용 &nbsp;|&nbsp; <b style="color:#fff">Q</b> 도감 &nbsp;|&nbsp; <b style="color:#fff">P</b> 디버그
+      <b style="color:#fff">E</b> 오브젝트 상호작용 &nbsp;|&nbsp; <b style="color:#fff">Q</b> 도감${DEBUG_MODE ? ' &nbsp;|&nbsp; <b style="color:#fff">P</b> 디버그' : ''}
     </div>
     <div class="sens-wrap" style="margin-top:22px;">
       <label>마우스 민감도</label>
