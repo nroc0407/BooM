@@ -78,8 +78,8 @@
   #up-tooltip-global {
     display: none; position: fixed; z-index: 9999;
     background: rgba(10,10,10,0.97); border: 1px solid #555;
-    color: #bbb; font-size: 12px; font-family: 'Share Tech Mono', monospace;
-    padding: 10px 14px; max-width: 280px; line-height: 1.7;
+    color: #bbb; font-size: calc(12px * var(--ui-scale, 1)); font-family: 'Share Tech Mono', monospace;
+    padding: calc(10px * var(--ui-scale, 1)) calc(14px * var(--ui-scale, 1)); max-width: calc(280px * var(--ui-scale, 1)); line-height: 1.7;
     pointer-events: none; letter-spacing: 0.5px;
   }
 
@@ -209,7 +209,7 @@
     <p class="start-controls"><b>WASD</b> 이동 · <b>마우스</b> 조준 · <b>좌클릭</b> 사격 · <b>우클릭</b> 근접 · <b>SPACE</b> 대쉬 · <b>ESC</b> 일시정지/설정</p>
   </div>
 
-  <div id="lock-hint">
+  <div id="lock-hint" style="display:none">
     <div class="lh-main">CLICK TO CAPTURE MOUSE</div>
     <div class="lh-sub">ESC 로 해제</div>
   </div>
@@ -6742,7 +6742,7 @@ function showUpgradeUI(onDone) {
     });
     btn.addEventListener('mousemove', ev => {
       const x = ev.clientX + 16, y = ev.clientY - 10;
-      tooltip.style.left = Math.min(x, window.innerWidth - 300) + 'px';
+      tooltip.style.left = Math.min(x, window.innerWidth - (tooltip.offsetWidth || 300) - 8) + 'px';
       tooltip.style.top = Math.max(y, 4) + 'px';
     });
     btn.addEventListener('mouseleave', () => {
@@ -7384,6 +7384,8 @@ renderBestRecord();
 
 document.getElementById('start-btn').addEventListener('click', () => {
   document.getElementById('overlay').style.display='none'; state.running=true;
+  // 시작 화면 뒤로 비치지 않도록 처음엔 숨겨 둔 캡처 안내 — 포인터 락이 성공하면 pointerlockchange 에서 다시 숨김
+  const lockHint = document.getElementById('lock-hint'); if (lockHint && !isPointerLocked()) lockHint.style.display = 'flex';
   initGame(); lastTime=performance.now(); requestAnimationFrame(gameLoop); canvas.requestPointerLock();
   BGM.start();
 });
