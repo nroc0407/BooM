@@ -2,6 +2,7 @@
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>BooM.HTML</title>
 <style>
   /* 전체 레이아웃 및 UI 스타일 */
@@ -9,6 +10,7 @@
 
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+  html, body { width: 100%; height: 100%; }
   body {
     background: #0a0a0a;
     display: flex;
@@ -22,12 +24,16 @@
     user-select: none;
   }
 
-  #screen-wrap { position: relative; }
+  /* UI 레이아웃 기준 박스는 1280x720(16:9). 창 크기에 맞춰 비율 유지 확대/축소(레터박스) — --ui-scale 은 JS 에서 갱신.
+     캔버스 실제 렌더 해상도(canvas.width/height)는 별도로 1280x720 ~ 1920x1080 사이에서 결정됩니다. */
+  #screen-wrap {
+    position: fixed; left: 50%; top: 50%; width: 1280px; height: 720px;
+    transform: translate(-50%, -50%) scale(var(--ui-scale, 1)); transform-origin: center center;
+  }
   canvas {
     display: block;
-    width: 1280px;
-    height: 740px;
-    image-rendering: pixelated;
+    width: 100%;
+    height: 100%;
   }
 
   /* 업그레이드 선택 UI */
@@ -125,12 +131,14 @@
   .sens-wrap label { color: #aaa; font-size: 13px; letter-spacing: 2px; }
   .sens-wrap input[type=range] { width: 220px; accent-color: #c00; cursor: pointer; }
   .sens-wrap .sens-val { color: #fff; font-size: 15px; min-width: 40px; text-align: center; }
+  .quality-btn { font-family: 'Share Tech Mono', monospace; font-size: 13px; background: transparent; border: 1px solid #555; color: #ccc; padding: 2px 10px; cursor: pointer; }
+  .quality-btn.active { border-color: #c00; color: #fff; background: rgba(180,0,0,0.35); }
 </style>
 </head>
 <body>
 
 <div id="screen-wrap">
-  <canvas id="game" width="640" height="370"></canvas>
+  <canvas id="game" width="1920" height="1080"></canvas>
 
   <div id="score-overlay">
     <div class="s-label">STAGE</div>
@@ -175,8 +183,6 @@
     <p class="up-sub">업그레이드를 선택하세요</p>
     <div id="upgrade-choices"></div>
   </div>
-  <div id="up-tooltip-global"></div>
-
   <div id="overlay">
     <h1>BooM</h1>
     <button class="start-btn" id="start-btn">[ START ]</button>
@@ -187,6 +193,8 @@
     <div class="lh-sub">ESC 로 해제</div>
   </div>
 </div>
+<!-- 툴팁은 clientX/Y 기준 position:fixed — 스케일되는 #screen-wrap 밖에 둬야 커서 위치와 일치 -->
+<div id="up-tooltip-global"></div>
 
 <script>
 // Math.hypot 네이티브 메서드를 사용합니다 (모던 브라우저 모두 지원)
@@ -558,22 +566,33 @@ function sndFootstep(fast) {
   nSrc.connect(nF); nF.connect(nG); nG.connect(out); nSrc.start(now);
 }
 
-// 내부 렌더 해상도. CSS에서 1280x740으로 2배 확대해 출력합니다.
-const SCREEN_W = 640; const SCREEN_H = 370;
+// 논리 좌표계(16:9). 모든 2D 그리기(스프라이트·HUD·텍스트)는 이 좌표로 하고,
+// 프레임마다 ctx.setTransform(RENDER_SCALE) 으로 실제 렌더 해상도(1280x720 ~ 1920x1080)에 맞춰 확대됩니다.
+const SCREEN_W = 640; const SCREEN_H = 360;
 let MAP_W = 20; let MAP_H = 20;
 const FOV = Math.PI / 3 * 1.2; const HALF_FOV = FOV / 2;
-const NUM_RAYS = 480; const MAX_DEPTH = 20; const WALL_SCALE = 1.0;
+const MAX_DEPTH = 20; const WALL_SCALE = 1.0;
 
-// --- [최적화 6단계] 480개 광선의 상대 각도 삼각함수 값을 미리 계산 (Lookup Table) ---
-const RAY_ANGLES = new Float32Array(NUM_RAYS);
-const RAY_COS = new Float32Array(NUM_RAYS);
-const RAY_SIN = new Float32Array(NUM_RAYS);
-for (let i = 0; i < NUM_RAYS; i++) {
-  const relAng = -HALF_FOV + (i / NUM_RAYS) * FOV;
-  RAY_ANGLES[i] = relAng;
-  RAY_COS[i] = Math.cos(relAng);
-  RAY_SIN[i] = Math.sin(relAng);
+//---/// 가변 렌더 해상도 ///---
+const RENDER_MIN_W = 1280, RENDER_MAX_W = 1920; // HD ~ FHD
+let RENDER_W = 1920, RENDER_H = 1080;           // 캔버스 실제 픽셀 크기
+let RENDER_SCALE = RENDER_W / SCREEN_W;         // 논리 → 실제 픽셀 배율
+let NUM_RAYS = RENDER_W / 2;                    // 레이 1개 = 실제 2px 폭 (해상도에 비례)
+
+// --- [최적화 6단계] 광선의 상대 각도 삼각함수 값을 미리 계산 (Lookup Table) — 해상도 변경 시 재생성 ---
+let RAY_ANGLES, RAY_COS, RAY_SIN;
+function buildRayTables() {
+  RAY_ANGLES = new Float32Array(NUM_RAYS);
+  RAY_COS = new Float32Array(NUM_RAYS);
+  RAY_SIN = new Float32Array(NUM_RAYS);
+  for (let i = 0; i < NUM_RAYS; i++) {
+    const relAng = -HALF_FOV + (i / NUM_RAYS) * FOV;
+    RAY_ANGLES[i] = relAng;
+    RAY_COS[i] = Math.cos(relAng);
+    RAY_SIN[i] = Math.sin(relAng);
+  }
 }
+buildRayTables();
 let ENEMY_COUNT = 8; const ITEM_COUNT = 5;
 //---/// 마우스 감도 — 기존 0.0025 에서 하향 조정 ///---
 let MOUSE_SENSITIVITY = 0.0005 * 6; // 슬라이더 기본값 6
@@ -1229,6 +1248,81 @@ let _cachedMerchant = null;
 const canvas = document.getElementById('game'); const ctx = canvas.getContext('2d');
 const keys = {};
 
+//---/// localStorage 설정 저장 — 프라이빗 모드/차단 환경에서도 게임이 멈추지 않도록 try/catch ///---
+const STORAGE_KEY_SETTINGS = 'boom.settings.v1';
+function loadStoredJSON(key) {
+  try { const raw = window.localStorage.getItem(key); return raw ? JSON.parse(raw) : null; } catch (e) { return null; }
+}
+function saveStoredJSON(key, value) {
+  try { window.localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* 저장 불가 환경 무시 */ }
+}
+const settings = Object.assign({}, loadStoredJSON(STORAGE_KEY_SETTINGS) || {});
+function saveSettings() { saveStoredJSON(STORAGE_KEY_SETTINGS, settings); }
+
+//---/// 화질(렌더 해상도) 설정: 자동 = 창 크기 x devicePixelRatio 기준 HD~FHD, 프레임이 계속 느리면 HD로 자동 하향 ///---
+const RENDER_QUALITY_LABELS = { auto: '자동', fhd: 'FHD', hd: 'HD' };
+let renderQuality = Object.prototype.hasOwnProperty.call(RENDER_QUALITY_LABELS, settings.quality) ? settings.quality : 'auto';
+let _autoQualityDropped = false;
+
+function pickRenderWidth() {
+  if (renderQuality === 'fhd') return RENDER_MAX_W;
+  if (renderQuality === 'hd' || _autoQualityDropped) return RENDER_MIN_W;
+  const dpr = window.devicePixelRatio || 1;
+  const dispW = Math.min(window.innerWidth, window.innerHeight * 16 / 9) * dpr;
+  const w = Math.max(RENDER_MIN_W, Math.min(RENDER_MAX_W, dispW || RENDER_MAX_W));
+  return Math.round(w / 16) * 16; // 16의 배수 → 16:9 높이가 정수
+}
+
+function applyRenderResolution() {
+  const w = pickRenderWidth(), h = w * 9 / 16;
+  if (w === RENDER_W && h === RENDER_H && canvas.width === w && canvas.height === h && _zBuffer.length === w / 2) return;
+  // 일시정지 중엔 다시 그리지 않으므로 현재 화면을 보존해 새 크기로 옮김
+  let snapshot = null;
+  if (state.running && canvas.width > 0) {
+    try {
+      snapshot = document.createElement('canvas');
+      snapshot.width = canvas.width; snapshot.height = canvas.height;
+      snapshot.getContext('2d').drawImage(canvas, 0, 0);
+    } catch (e) { snapshot = null; }
+  }
+  canvas.width = w; canvas.height = h;
+  RENDER_W = w; RENDER_H = h; RENDER_SCALE = w / SCREEN_W;
+  NUM_RAYS = w / 2; buildRayTables(); _zBuffer = new Float32Array(NUM_RAYS);
+  if (snapshot) ctx.drawImage(snapshot, 0, 0, w, h);
+  const resVal = document.getElementById('quality-res-val');
+  if (resVal) resVal.textContent = `${RENDER_W}×${RENDER_H}`;
+}
+
+function setRenderQuality(q) {
+  if (!Object.prototype.hasOwnProperty.call(RENDER_QUALITY_LABELS, q)) return;
+  renderQuality = q; _autoQualityDropped = false; _perfSlowMs = 0;
+  settings.quality = q; saveSettings();
+  applyRenderResolution();
+  document.querySelectorAll('.quality-btn').forEach(b => b.classList.toggle('active', b.dataset.quality === q));
+}
+
+//---/// 자동 화질: 평균 프레임 간격이 ~22ms(약 45fps 미만)를 4초 이상 유지하면 HD로 낮춤 ///---
+let _perfEmaMs = 16.7, _perfSlowMs = 0;
+function monitorRenderPerf(rawMs) {
+  if (renderQuality !== 'auto' || _autoQualityDropped || RENDER_W <= RENDER_MIN_W) return;
+  if (!(rawMs > 0) || rawMs > 250 || document.hidden) return; // 탭 전환·일시정지 복귀 등 비정상 간격 무시
+  _perfEmaMs += (rawMs - _perfEmaMs) * 0.05;
+  if (_perfEmaMs > 22) {
+    _perfSlowMs += rawMs;
+    if (_perfSlowMs > 4000) { _autoQualityDropped = true; applyRenderResolution(); }
+  } else {
+    _perfSlowMs = Math.max(0, _perfSlowMs - rawMs);
+  }
+}
+
+//---/// 화면 맞춤: UI 박스(1280x720)를 창에 맞춰 비율 유지 스케일, 렌더 해상도 재계산 ///---
+function fitScreenToWindow() {
+  const sc = Math.min(window.innerWidth / 1280, window.innerHeight / 720);
+  document.documentElement.style.setProperty('--ui-scale', String(sc > 0 ? sc : 1));
+  applyRenderResolution();
+}
+window.addEventListener('resize', fitScreenToWindow);
+
 const HUD = {
   score: null, stage: null, kills: null, damage: null,
   pending: null, pendingCount: null,
@@ -1739,6 +1833,13 @@ function showPauseOverlay() {
         <input type="range" id="bgm-vol-slider" min="0" max="100" step="1" value="${Math.round(_bgmVol * 100)}">
         <span class="sens-val" id="bgm-vol-val">${Math.round(_bgmVol * 100)}</span>
         <button id="bgm-mute-btn" style="font-family:'Share Tech Mono',monospace;font-size:13px;background:transparent;border:1px solid #555;color:#ccc;padding:2px 10px;cursor:pointer;">${_bgmMuted ? 'UNMUTE' : 'MUTE'}</button>
+      </div>
+    </div>
+    <div class="sens-wrap" style="margin-top:14px;">
+      <label>화질 (렌더 해상도)</label>
+      <div style="display:flex;align-items:center;gap:8px;">
+        ${Object.keys(RENDER_QUALITY_LABELS).map(q => `<button class="quality-btn${q === renderQuality ? ' active' : ''}" data-quality="${q}">${RENDER_QUALITY_LABELS[q]}</button>`).join('')}
+        <span class="sens-val" id="quality-res-val" style="min-width:96px;">${RENDER_W}×${RENDER_H}</span>
       </div>
     </div>
   `;
@@ -4904,10 +5005,10 @@ function renderExplosionFX(zBuffer) {
   });
 }
 
-let _screenImgData = null; // 최적화: 전역 이미지 버퍼 재사용
+let _screenImgData = null; // 최적화: 전역 이미지 버퍼 재사용 (해상도 변경 시에만 재생성)
 let _screenU32 = null;      // [최적화] ImageData 버퍼의 32bit 뷰 — 픽셀당 4회 → 1회 쓰기
-const _zBuffer = new Float32Array(NUM_RAYS); // 전역 1회 할당으로 GC 방지
-let _cachedBgData = null; // --- [최적화 5단계] 배경 그라데이션 캐싱 배열 (32bit) ---
+let _zBuffer = new Float32Array(NUM_RAYS); // 전역 1회 할당으로 GC 방지 (해상도 변경 시 재할당)
+let _cachedBgData = null; // --- [최적화 5단계] 배경 그라데이션 캐싱 배열 (32bit, 해상도별 1회 생성) ---
 const _damageFlashEl = document.getElementById('damage-flash'); // [최적화] 매 프레임 DOM 탐색 방지
 let _lastDamageFlashBg = '';
 const _IS_LITTLE_ENDIAN = new Uint8Array(new Uint32Array([0x0a0b0c0d]).buffer)[0] === 0x0d;
@@ -4933,22 +5034,26 @@ function getWallTexU32(wallType) {
 }
 const _colU32 = new Uint32Array(64); // 레이 1개의 안개 적용된 텍스처 세로줄 (재사용 버퍼)
 
-function castRays(bobY) {
-  if (!_screenImgData) {
-    _screenImgData = ctx.createImageData(SCREEN_W, SCREEN_H);
+// 벽/천장/바닥은 ImageData 로 실제 렌더 해상도(RENDER_W x RENDER_H)에서 직접 그립니다.
+// (putImageData 는 변환 행렬을 무시하므로 논리 좌표가 아닌 실제 픽셀 좌표 사용)
+function castRays(bobYLogical) {
+  const W = RENDER_W, H = RENDER_H;
+  const bobY = bobYLogical * RENDER_SCALE;
+  if (!_screenImgData || _screenImgData.width !== W || _screenImgData.height !== H) {
+    _screenImgData = ctx.createImageData(W, H);
     _screenU32 = new Uint32Array(_screenImgData.data.buffer);
     
-    // --- [최적화 5단계] 천장/바닥 그라데이션을 최초 1회만 연산하여 메모리에 구워버립니다 ---
-    _cachedBgData = new Uint32Array(SCREEN_W * SCREEN_H);
-    for (let y = 0; y < SCREEN_H; y++) {
+    // --- [최적화 5단계] 천장/바닥 그라데이션을 해상도별 1회만 연산하여 메모리에 구워버립니다 ---
+    _cachedBgData = new Uint32Array(W * H);
+    for (let y = 0; y < H; y++) {
       let r, g, b;
-      if (y < SCREEN_H / 2) {
-        const t = y / (SCREEN_H / 2);
+      if (y < H / 2) {
+        const t = y / (H / 2);
         r = Math.floor(4 + t * 6); g = Math.floor(5 + t * 7); b = Math.floor(8 + t * 12);
       } else {
-        const t = (y - SCREEN_H / 2) / (SCREEN_H / 2); r = Math.floor(26 + t*16); g = Math.floor(t*4); b = 0;
+        const t = (y - H / 2) / (H / 2); r = Math.floor(26 + t*16); g = Math.floor(t*4); b = 0;
       }
-      _cachedBgData.fill(packRGBA(r, g, b), y * SCREEN_W, (y + 1) * SCREEN_W);
+      _cachedBgData.fill(packRGBA(r, g, b), y * W, (y + 1) * W);
     }
   }
   
@@ -4983,13 +5088,13 @@ function castRays(bobY) {
     let dist = side===0 ? (mapX - player.x + (1-stepX)/2) / cosA : (mapY - player.y + (1-stepY)/2) / sinA;
     dist = Math.max(0.1, dist); zBuffer[ray] = dist;
     const corrected = dist * RAY_COS[ray]; // [최적화] Math.cos(rayAngle - player.angle) → 룩업테이블 재사용
-    const wallH = Math.floor((SCREEN_H/corrected)*WALL_SCALE);
-    const wallTop = Math.max(0, Math.floor((SCREEN_H-wallH)/2 + bobY)); const wallBottom = Math.min(SCREEN_H, wallTop+wallH);
+    const wallH = Math.floor((H/corrected)*WALL_SCALE);
+    const wallTop = Math.max(0, Math.floor((H-wallH)/2 + bobY)); const wallBottom = Math.min(H, wallTop+wallH);
     
     // [수정됨] 텍스처 픽셀 매핑 로직
     const fog = Math.max(0, 1-dist/MAX_DEPTH);
-    const screenX0 = Math.round(ray * SCREEN_W / NUM_RAYS); 
-    const screenX1 = Math.round((ray + 1) * SCREEN_W / NUM_RAYS);
+    const screenX0 = Math.round(ray * W / NUM_RAYS); 
+    const screenX1 = Math.round((ray + 1) * W / NUM_RAYS);
     if (wallBottom <= wallTop || screenX1 <= screenX0) continue;
     
     // 벽의 정확한 X 타격점 계산 (텍스처의 가로 좌표 0~63 추출)
@@ -5018,22 +5123,23 @@ function castRays(bobY) {
     
     const texStep = 64.0 / wallH;
     // 화면 밖으로 잘린 천장 부분만큼 텍스처의 시작 Y 좌표를 내려줌
-    let texPos = (wallTop - ((SCREEN_H - wallH) / 2 + bobY)) * texStep;
+    let texPos = (wallTop - ((H - wallH) / 2 + bobY)) * texStep;
     const colW = screenX1 - screenX0;
 
-    let rowBase = wallTop * SCREEN_W + screenX0;
-    if (colW === 1) {
+    let rowBase = wallTop * W + screenX0;
+    if (colW === 2) { // 기본값: 레이 1개 = 2px (NUM_RAYS = RENDER_W / 2)
       for (let y = wallTop; y < wallBottom; y++) {
-        buf[rowBase] = col[Math.floor(texPos) & 63]; // 비트연산으로 0~63 제한
-        texPos += texStep; rowBase += SCREEN_W;
+        const c = col[Math.floor(texPos) & 63]; // 비트연산으로 0~63 제한
+        texPos += texStep;
+        buf[rowBase] = c; buf[rowBase + 1] = c;
+        rowBase += W;
       }
     } else {
       for (let y = wallTop; y < wallBottom; y++) {
         const c = col[Math.floor(texPos) & 63];
         texPos += texStep;
-        // 좁은 컬럼은 TypedArray.fill 호출 비용이 더 커서 직접 루프
         for (let i = rowBase, e = rowBase + colW; i < e; i++) buf[i] = c;
-        rowBase += SCREEN_W;
+        rowBase += W;
       }
     }
   }
@@ -6969,6 +7075,7 @@ function gameLoop(timestamp) {
     return;
   }
 
+  monitorRenderPerf(timestamp - lastTime);
   const dt = Math.min((timestamp - lastTime) / 1000, 0.05); lastTime = timestamp;
 
   if (portal) {
@@ -7013,6 +7120,7 @@ function gameLoop(timestamp) {
   //---/// 화면 렌더링 파트 ///---
   const bobY = Math.sin(player.bobPhase) * player.bobAmt * 4;
   const zBuffer = castRays(bobY);
+  ctx.setTransform(RENDER_SCALE, 0, 0, RENDER_SCALE, 0, 0); // 이후 2D 그리기는 논리 좌표(640x360)
   
   renderSprites(zBuffer, bobY); 
   renderParticles3D(zBuffer, bobY); // [핵심 최적화] 파티클 전용 패스 — 정렬 부하 제거
@@ -7151,6 +7259,12 @@ document.addEventListener('input', e => {
 });
 //---/// BGM 음소거 버튼 위임 ///---
 document.addEventListener('click', e => {
+  //---/// 화질 버튼 위임 ///---
+  if (e.target && e.target.classList && e.target.classList.contains('quality-btn')) {
+    e.stopPropagation();
+    setRenderQuality(e.target.dataset.quality);
+    return;
+  }
   if (e.target && e.target.id === 'bgm-mute-btn') {
     e.stopPropagation();
     _bgmMuted = !_bgmMuted;
@@ -7158,6 +7272,8 @@ document.addEventListener('click', e => {
     e.target.textContent = _bgmMuted ? 'UNMUTE' : 'MUTE';
   }
 });
+
+fitScreenToWindow(); // 초기 화면 맞춤 + 렌더 해상도 결정 (모든 전역 선언 이후)
 
 document.getElementById('start-btn').addEventListener('click', () => {
   document.getElementById('overlay').style.display='none'; state.running=true;
