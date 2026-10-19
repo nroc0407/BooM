@@ -41,6 +41,8 @@
     width: 100%;
     height: 100%;
   }
+  /* 게임 화면: 렌더 해상도(기본 1920x1080)를 창 크기로 줄일 때 부드럽게 보간(픽셀 확대 방식 금지) */
+  #game { image-rendering: auto; }
 
   /* 업그레이드 선택 UI */
   #upgrade-overlay {
@@ -618,7 +620,9 @@ const MAX_DEPTH = 20; const WALL_SCALE = 1.0;
 const RENDER_MIN_W = 1280, RENDER_MAX_W = 1920; // HD ~ FHD
 let RENDER_W = 1920, RENDER_H = 1080;           // 캔버스 실제 픽셀 크기
 let RENDER_SCALE = RENDER_W / SCREEN_W;         // 논리 → 실제 픽셀 배율
-let NUM_RAYS = RENDER_W / 2;                    // 레이 1개 = 실제 2px 폭 (해상도에 비례)
+//---/// 레이 폭: FHD/자동은 1px(레이 1개 = 실제 픽셀 1열, 가로 계단 없음), HD·자동 하향 시 2px(연산 절반) ///---
+let RAY_PX = 1;
+let NUM_RAYS = RENDER_W / RAY_PX;               // 레이 수 = 렌더 가로 픽셀 / 레이 폭
 
 // --- [최적화 6단계] 광선의 상대 각도 삼각함수 값을 미리 계산 (Lookup Table) — 해상도 변경 시 재생성 ---
 let RAY_ANGLES, RAY_COS, RAY_SIN;
@@ -1335,7 +1339,8 @@ function recordBestProgress() {
 
 //---/// 화질(렌더 해상도) 설정: 자동 = 창 크기 x devicePixelRatio 기준 HD~FHD, 프레임이 계속 느리면 HD로 자동 하향 ///---
 const RENDER_QUALITY_LABELS = { auto: '자동', fhd: 'FHD', hd: 'HD' };
-let renderQuality = Object.prototype.hasOwnProperty.call(RENDER_QUALITY_LABELS, settings.quality) ? settings.quality : 'auto';
+// 기본값 FHD(창 크기와 무관하게 1920x1080 렌더 후 CSS 로 부드럽게 축소). 사용자가 고른 값이 저장돼 있으면 그대로 사용
+let renderQuality = Object.prototype.hasOwnProperty.call(RENDER_QUALITY_LABELS, settings.quality) ? settings.quality : 'fhd';
 let _autoQualityDropped = false;
 
 function pickRenderWidth() {
@@ -1347,9 +1352,13 @@ function pickRenderWidth() {
   return Math.round(w / 16) * 16; // 16의 배수 → 16:9 높이가 정수
 }
 
+function pickRayWidth() {
+  return (renderQuality === 'hd' || _autoQualityDropped) ? 2 : 1;
+}
+
 function applyRenderResolution() {
-  const w = pickRenderWidth(), h = w * 9 / 16;
-  if (w === RENDER_W && h === RENDER_H && canvas.width === w && canvas.height === h && _zBuffer.length === w / 2) return;
+  const w = pickRenderWidth(), h = w * 9 / 16, rayPx = pickRayWidth();
+  if (w === RENDER_W && h === RENDER_H && canvas.width === w && canvas.height === h && rayPx === RAY_PX && _zBuffer.length === w / rayPx) return;
   // 일시정지 중엔 다시 그리지 않으므로 현재 화면을 보존해 새 크기로 옮김
   let snapshot = null;
   if (state.running && canvas.width > 0) {
@@ -1361,7 +1370,7 @@ function applyRenderResolution() {
   }
   canvas.width = w; canvas.height = h;
   RENDER_W = w; RENDER_H = h; RENDER_SCALE = w / SCREEN_W;
-  NUM_RAYS = w / 2; buildRayTables(); _zBuffer = new Float32Array(NUM_RAYS);
+  RAY_PX = rayPx; NUM_RAYS = w / rayPx; buildRayTables(); _zBuffer = new Float32Array(NUM_RAYS);
   if (snapshot) ctx.drawImage(snapshot, 0, 0, w, h);
   const resVal = document.getElementById('quality-res-val');
   if (resVal) resVal.textContent = `${RENDER_W}×${RENDER_H}`;
@@ -5210,7 +5219,7 @@ function castRays(bobYLogical) {
     const colW = screenX1 - screenX0;
 
     let rowBase = wallTop * W + screenX0;
-    if (colW === 2) { // 기본값: 레이 1개 = 2px (NUM_RAYS = RENDER_W / 2)
+    if (colW === 2) { // HD: 레이 1개 = 2px
       for (let y = wallTop; y < wallBottom; y++) {
         const c = col[Math.floor(texPos) & 63]; // 비트연산으로 0~63 제한
         texPos += texStep;
