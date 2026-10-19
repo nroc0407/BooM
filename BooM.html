@@ -223,10 +223,28 @@ function getAudioCtx() {
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   return audioCtx;
 }
+//---/// 일시정지/탭 숨김 시 AudioContext 자체를 정지 (BGM·SFX 모두) ///---
+let _audioSuspendedByGame = false;
 function resumeAudio() {
   const ctx = getAudioCtx();
+  if (_audioSuspendedByGame) return; // 일시정지 중에는 SFX 호출로 다시 깨우지 않음
   if (ctx.state === 'suspended') ctx.resume();
 }
+function shouldSuspendAudio() {
+  return document.hidden || (state.running && state.paused && !state.dead);
+}
+function syncAudioPause() {
+  if (!audioCtx) return;
+  const want = shouldSuspendAudio();
+  if (want === _audioSuspendedByGame) return;
+  _audioSuspendedByGame = want;
+  if (want) {
+    if (audioCtx.state === 'running') audioCtx.suspend().catch(() => {});
+  } else if (audioCtx.state === 'suspended') {
+    audioCtx.resume().catch(() => {});
+  }
+}
+document.addEventListener('visibilitychange', syncAudioPause);
 
 //---/// 8bit BGM 엔진 (16가지 조합형 생성형 BGM) ///---
 const BGM = (() => {
@@ -330,6 +348,8 @@ const BGM = (() => {
   }
 
   function pump() {
+    // 정지 중에는 스케줄링 생략 — 재개 시 아래 now 보정으로 밀린 노트가 한꺼번에 쌓이지 않음
+    if (_audioSuspendedByGame) return;
     const now = getAudioCtx().currentTime;
     if (scheduledUntil < now) scheduledUntil = now;
 
@@ -898,6 +918,7 @@ const state = {
   pendingUpgrades: 0, 
   upgrades: {}, // [NEW] 모든 업그레이드 스택을 관리하는 중앙 저장소
   bossKilled: false, // [VARIANT] 첫 보스 처치 여부 — 변종 등장 잠금 해제 플래그
+  deathHandled: false, // 사망 시 1회성 처리(BGM 정지 등) 완료 여부
 };
 
 // [NEW] 중앙 저장소 헬퍼 함수
@@ -1881,6 +1902,7 @@ function handlePointerLockChange() {
     lastTime = performance.now();
     hidePauseOverlay();
   }
+  syncAudioPause();
 }
 
 document.addEventListener('keydown', handleKeyDown);
@@ -2097,7 +2119,7 @@ function initGame() {
   state.health = 100; state.armor = 25; state.maxArmor = 50; state.exp = 0; state.level = 1; state.maxExp = 100;
   state.score = 0; state.kills = 0; state.totalDamage = 0; state.dead = false; state.stage = 1; state.forceShop = false; state.countdown = 0; state.countdownVal = 0;
   state.upgrading = false; state.paused = false; state.fadeOut = 0; state.fadeAlpha = 0; state.fadeIn = 0.5;
-  state.pendingUpgrades = 0; state.bossKilled = false;
+  state.pendingUpgrades = 0; state.bossKilled = false; state.deathHandled = false;
   particles = []; explosionFX = []; lightningLines = []; soulFX = []; muzzleFlash = 0; meleeFlash = 0; damageFlashAlpha = 0; mouseDeltaX = 0;
   dashCooldown = 0; dashActive = 0; dashVX = 0; dashVY = 0; screenPellets = []; enemyBullets = []; bossAoes = []; skyStrikes = [];
   portal = null; portal2 = null; damageIndicators = [];
@@ -7071,7 +7093,6 @@ function renderTelegraphs() {
 }
 
 function renderDead() {
-  BGM.stop();
   //---/// 사망 시 커서 캡처 해제 ///---
   if (document.pointerLockElement === canvas) document.exitPointerLock();
   ctx.save(); ctx.fillStyle='rgba(150,0,0,0.65)'; ctx.fillRect(0,0,SCREEN_W,SCREEN_H);
@@ -7082,8 +7103,14 @@ function renderDead() {
 }
 
 
+//---/// 사망 직후 1회만 실행 (매 프레임 BGM.stop() 호출 방지) ///---
+function onPlayerDeath() {
+  BGM.stop();
+}
+
 function gameLoop(timestamp) {
   if (!state.running) return;
+  syncAudioPause();
 
   if (state.upgrading || state.paused) {
     lastTime = timestamp;
@@ -7185,7 +7212,10 @@ function gameLoop(timestamp) {
   }
 
   //---/// 사망 처리 ///---
-  if (state.dead) renderDead();
+  if (state.dead) {
+    if (!state.deathHandled) { state.deathHandled = true; onPlayerDeath(); }
+    renderDead();
+  }
   
   //---/// 화면 페이드 아웃/인 처리 ///---
   if (state.fadeOut > 0 && state.fadeAlpha > 0) { 
