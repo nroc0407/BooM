@@ -118,6 +118,12 @@
   #overlay .start-btn { margin-top: 10px; padding: 12px 40px; background: transparent; border: 2px solid #c00; color: #c00; font-family: 'Share Tech Mono', monospace; font-size: 22px; letter-spacing: 4px; cursor: pointer; text-shadow: 0 0 10px #f00; box-shadow: 0 0 20px #c0000066; transition: all 0.2s; }
   #overlay .start-btn:hover { background: #c00; color: #000; box-shadow: 0 0 40px #f00; }
 
+  #overlay .touch-notice {
+    display: none; max-width: 640px; padding: 12px 20px; border: 1px solid #c80; background: rgba(60,30,0,0.6);
+    color: #fc6; font-size: 17px; letter-spacing: 1px; line-height: 1.8; text-align: center;
+  }
+  #overlay .touch-notice b { color: #fff; }
+
   #controls-hint { display: none; }
   #damage-flash { position: absolute; inset: 0; background: rgba(200,0,0,0); pointer-events: none; transition: background 0.05s; z-index: 5; }
 
@@ -185,6 +191,10 @@
   </div>
   <div id="overlay">
     <h1>BooM</h1>
+    <div class="touch-notice" id="touch-notice" role="alert">
+      ⚠ 이 게임은 <b>PC(키보드+마우스) 전용</b>입니다.<br>
+      터치 화면만 있는 기기(휴대폰·태블릿)에서는 조작할 수 없습니다.
+    </div>
     <button class="start-btn" id="start-btn">[ START ]</button>
   </div>
 
@@ -7274,6 +7284,16 @@ document.addEventListener('click', e => {
 });
 
 fitScreenToWindow(); // 초기 화면 맞춤 + 렌더 해상도 결정 (모든 전역 선언 이후)
+
+//---/// 터치 전용 기기 안내: 주 입력이 coarse(손가락)이고 마우스 같은 fine 포인터가 하나도 없을 때만 표시 ///---
+// (터치스크린 + 마우스를 함께 쓰는 노트북/데스크톱은 any-pointer: fine 이 참이라 표시되지 않음)
+function isTouchOnlyDevice() {
+  try {
+    if (!window.matchMedia) return false;
+    return window.matchMedia('(pointer: coarse)').matches && !window.matchMedia('(any-pointer: fine)').matches;
+  } catch (e) { return false; }
+}
+if (isTouchOnlyDevice()) document.getElementById('touch-notice').style.display = 'block';
 
 document.getElementById('start-btn').addEventListener('click', () => {
   document.getElementById('overlay').style.display='none'; state.running=true;
